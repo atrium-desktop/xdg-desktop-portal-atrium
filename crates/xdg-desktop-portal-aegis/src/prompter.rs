@@ -176,12 +176,23 @@ fn invoke_raw(
     let send_result = serde_json::to_writer(&mut stdin, &request)
         .map_err(|error| error.to_string())
         .and_then(|()| stdin.write_all(b"\n").map_err(|error| error.to_string()));
-    if let Err(error) = send_result {
-        terminate(&mut child);
-        let _ = stderr_tail.join();
-        return Err(InvokeError::Failed(format!(
-            "could not send prompter request: {error}"
-        )));
+    // A prompter that dies before reading its request (the loader-refusal
+    // shape: exit 127 before the first read) closes stdin's write end, so
+    // the write fails with EPIPE. That is the child dying, not a transport
+    // failure — fall through to the wait below so the exit status and the
+    // tee'd stderr line (which name the real cause) reach the caller.
+    // Other write errors (a closed pipe on our side) abort as before.
+    if let Err(error) = &send_result {
+        let is_broken_pipe = error.contains("Broken pipe")
+            || error.contains("broken pipe")
+            || error.to_lowercase().contains("epipe");
+        if !is_broken_pipe {
+            terminate(&mut child);
+            let _ = stderr_tail.join();
+            return Err(InvokeError::Failed(format!(
+                "could not send prompter request: {error}"
+            )));
+        }
     }
     drop(stdin);
 
