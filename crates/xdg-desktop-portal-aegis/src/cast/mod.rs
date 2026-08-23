@@ -78,7 +78,7 @@ mod publish;
 mod state;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -376,12 +376,13 @@ fn run_cast(
                 mode: DeliveryMode::Shm,
                 consumer_data_types: None,
             }),
-            pool: RefCell::new(Vec::new()),
+            pool: RefCell::new(VecDeque::new()),
             pool_mem: Rc::clone(&teardown_pool_mem),
             client: Rc::clone(&client),
             mainloop: mainloop.downgrade(),
             start_state,
             sequence: Cell::new(0),
+            buffer_metas: RefCell::new(HashMap::new()),
             dropped_frames: Cell::new(0),
             warned_unmappable: Cell::new(false),
         })
@@ -466,10 +467,17 @@ fn run_cast(
                     };
                     (buffers, header_meta_pod(), damage_meta_pod())
                 };
+                // Header first: PipeWire 1.0.x merges ParamMeta offers in
+                // enumeration order and drops metas past an early
+                // fixate/limit, so the order of this array decides whether
+                // SPA_META_Header survives into the negotiated buffer
+                // layout on the Ubuntu 24.04 baseline (PipeWire 1.0.5).
+                // Without it every frame ships a zeroed header and
+                // consumers read sequence 0 / PTS 0 forever.
                 let mut params = [
-                    Pod::from_bytes(&buffers).expect("buffers pod"),
                     Pod::from_bytes(&header_meta).expect("header meta pod"),
                     Pod::from_bytes(&damage_meta).expect("damage meta pod"),
+                    Pod::from_bytes(&buffers).expect("buffers pod"),
                 ];
                 if let Err(error) = stream.update_params(&mut params) {
                     log::warn!("portal: pipewire update_params failed: {error}");
@@ -482,6 +490,12 @@ fn run_cast(
             }
         })
         .add_buffer(|_stream, data, buffer| {
+            // Snapshot the intact meta array: PipeWire 1.0.x zeroes the
+            // `type` fields after the first consumer return, and the
+            // publish path resolves metas through this snapshot then.
+            data.buffer_metas
+                .borrow_mut()
+                .insert(buffer as usize, unsafe { meta::snapshot_metas(buffer) });
             // With ALLOC_BUFFERS the producer fills each pool buffer's data
             // slot here, before the buffer registers with the consumer. A
             // dmabuf-negotiated slot stream binds the next compositor slot;
@@ -571,6 +585,7 @@ fn run_cast(
         .remove_buffer(|_stream, data, buffer| {
             // The pool is being torn down (renegotiation or stop): drop the
             // binding and release any in-flight slot the consumer abandoned.
+            data.buffer_metas.borrow_mut().remove(&(buffer as usize));
             data.pool_mem.borrow_mut().remove(&(buffer as usize));
             data.pool.borrow_mut().retain(|pooled| *pooled != buffer);
             let mut transport = data.transport.borrow_mut();
@@ -785,10 +800,24 @@ fn run_cast(
     });
     keepalive_timer.update_timer(Some(KEEPALIVE_INTERVAL), Some(KEEPALIVE_INTERVAL));
 
+    // The Param:Meta offers (Header PTS/sequence, VideoDamage) are declared
+    // up front with the format at connect() — not only re-offered from
+    // param_changed(Format). Buffer allocation runs the link's meta
+    // negotiation against whatever the port enumerates at that moment;
+    // declaring the metas only after the format fixates loses the race on
+    // PipeWire 1.0.x (Ubuntu 24.04 LTS), where the negotiated buffer
+    // layout then carries no meta blocks at all: the producer's
+    // spa_buffer_find_meta returns NULL, every published frame ships a
+    // zeroed header, and consumers see sequence 0 forever.
+    let header_meta_bytes = header_meta_pod();
+    let damage_meta_bytes = damage_meta_pod();
     let mut format_refs: Vec<&Pod> = format_bytes
         .iter()
         .map(|bytes| Pod::from_bytes(bytes).expect("format pod"))
         .collect();
+    for bytes in [&header_meta_bytes, &damage_meta_bytes] {
+        format_refs.push(Pod::from_bytes(bytes).expect("meta pod"));
+    }
     stream
         .connect(
             // This stream publishes compositor frames. `Input` describes a

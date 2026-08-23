@@ -144,10 +144,15 @@ pub fn consume_frames_metadata(
             let buffers = buffers_pod(mask);
             let damage_meta = damage_meta_pod();
             let header_meta = header_meta_pod();
+            // Header first: PipeWire 1.0.x's ParamMeta merge is
+            // enumeration-order sensitive — on the Ubuntu 24.04 baseline
+            // (PipeWire 1.0.5) a Header offer that follows other metas is
+            // dropped from the negotiated buffer layout, and every frame
+            // then ships a zeroed header (sequence 0, PTS 0).
             let mut params = [
-                Pod::from_bytes(&buffers).expect("buffers pod"),
-                Pod::from_bytes(&damage_meta).expect("damage meta pod"),
                 Pod::from_bytes(&header_meta).expect("header meta pod"),
+                Pod::from_bytes(&damage_meta).expect("damage meta pod"),
+                Pod::from_bytes(&buffers).expect("buffers pod"),
             ];
             let _ = stream.update_params(&mut params);
         })
@@ -234,8 +239,22 @@ pub fn consume_frames_metadata(
 
     let timeout_loop_weak = mainloop.downgrade();
     let timeout_err = Rc::clone(&error);
+    let timeout_results = Rc::clone(&results);
+    let timeout_count = count;
     let timeout_timer = mainloop.loop_().add_timer(move |_| {
-        *timeout_err.borrow_mut() = Some("timed out waiting for frames".into());
+        let seen = timeout_results.borrow();
+        // Partial delivery separates the two failure modes: zero frames
+        // means the graph never ran a cycle (driver trigger ineffective);
+        // partial means buffers are not recycled between frames.
+        let sequences = seen
+            .iter()
+            .map(|f| f.seq.unwrap_or(u64::MAX))
+            .collect::<Vec<_>>();
+        *timeout_err.borrow_mut() = Some(format!(
+            "timed out waiting for frames (received {} of {}, sequences {sequences:?})",
+            seen.len(),
+            timeout_count,
+        ));
         if let Some(mainloop) = timeout_loop_weak.upgrade() {
             mainloop.quit();
         }

@@ -127,7 +127,7 @@ pub(crate) fn copy_into_pool(
     let Some(pool_raw) = data
         .pool
         .borrow_mut()
-        .pop()
+        .pop_front()
         .or_else(|| NonNull::new(unsafe { stream.dequeue_raw_buffer() }).map(NonNull::as_ptr))
     else {
         // Pool starvation is transient: the consumer returns buffers on
@@ -146,7 +146,7 @@ pub(crate) fn copy_into_pool(
         let dest_ptr = (*spa_data).data.cast::<u8>();
         let dest_cap = (*spa_data).maxsize as usize;
         if dest_ptr.is_null() || dest_cap < height * row_bytes {
-            data.pool.borrow_mut().push(pool_raw);
+            data.pool.borrow_mut().push_back(pool_raw);
             false
         } else {
             let dest = std::slice::from_raw_parts_mut(dest_ptr, dest_cap);
@@ -159,8 +159,20 @@ pub(crate) fn copy_into_pool(
             let seq = data.sequence.get();
             data.sequence.set(seq + 1);
             let pts = super::meta::monotonic_pts_nanos();
-            super::meta::attach_header(pool_raw, seq, pts);
-            super::meta::attach_damage(pool_raw, damage, width, height as u32);
+            // The metas map is keyed per buffer; a missing entry (no
+            // add_buffer snapshot) simply skips meta attachment.
+            let buffer_metas = data.buffer_metas.borrow();
+            let metas = buffer_metas
+                .get(&(pool_raw as usize))
+                .cloned()
+                .unwrap_or_default();
+            drop(buffer_metas);
+            super::meta::attach_header(pool_raw, &metas, seq, pts);
+            super::meta::attach_damage(pool_raw, &metas, damage, width, height as u32);
+            log::debug!(
+                "portal: published copy frame seq {seq} (pool free: {})",
+                data.pool.borrow().len()
+            );
             stream.queue_raw_buffer(pool_raw);
             true
         }

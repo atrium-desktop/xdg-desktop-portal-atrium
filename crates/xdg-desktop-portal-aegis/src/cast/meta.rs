@@ -5,10 +5,71 @@
 //! [`spa_sys`]; the unsafe island below mirrors the `add_buffer` patching
 //! in `cast::mod`.
 
+use std::collections::HashMap;
+
+use super::state::BufferMetaSnapshot;
+
 use pipewire::spa::pod::{self};
 use pipewire::spa::sys as spa_sys;
 use pipewire::spa::{self};
 use pipewire::sys as pw_sys;
+
+/// Snapshot a pool buffer's meta array, keyed by meta type.
+///
+/// Called from `add_buffer`, where the layout is intact. See
+/// [`crate::cast::state::StreamData::buffer_metas`] for why the live array
+/// cannot be trusted after the first consumer return on PipeWire 1.0.x.
+///
+/// # Safety
+/// `buffer` must be a live pool buffer of this stream handed to
+/// `add_buffer`, whose `spa_buffer` and `metas` array are valid.
+pub(crate) unsafe fn snapshot_metas(buffer: *mut pw_sys::pw_buffer) -> BufferMetaSnapshot {
+    let mut map = HashMap::new();
+    let spa_buffer = unsafe { (*buffer).buffer };
+    if spa_buffer.is_null() {
+        return map;
+    }
+    let (n_metas, metas) = unsafe { ((*spa_buffer).n_metas, (*spa_buffer).metas) };
+    for index in 0..n_metas {
+        // SAFETY: `metas` is the live meta array of length `n_metas`.
+        let meta = unsafe { metas.add(index as usize) };
+        let meta = unsafe { &*meta };
+        map.insert(meta.type_, (meta.data as usize, meta.size));
+    }
+    map
+}
+
+/// Resolve a meta block on a pool buffer, preferring the live array and
+/// falling back to the `add_buffer` snapshot when PipeWire 1.0.x has zeroed
+/// the array's `type` fields after a consumer return. Returns the meta's
+/// data pointer and size.
+///
+/// # Safety
+/// `buffer` must be a live pool buffer of this stream whose snapshot (if
+/// used) was captured from its own `add_buffer`.
+pub(crate) unsafe fn find_meta(
+    buffer: *mut pw_sys::pw_buffer,
+    meta_type: u32,
+    snapshot: &BufferMetaSnapshot,
+) -> Option<(*mut std::ffi::c_void, u32)> {
+    let spa_buffer = unsafe { (*buffer).buffer };
+    if !spa_buffer.is_null() {
+        // SAFETY: the live array is valid memory even when its `type`
+        // fields were zeroed; the lookup only reads.
+        let live = unsafe { spa_sys::spa_buffer_find_meta(spa_buffer, meta_type) };
+        if !live.is_null() {
+            // SAFETY: a live hit is a negotiated `spa_meta`.
+            let meta = unsafe { &*live };
+            return Some((meta.data, meta.size));
+        }
+    }
+    // SAFETY: snapshot entries were captured from this same buffer's
+    // `add_buffer` layout; `remove_buffer` clears them before the buffer
+    // can be freed.
+    snapshot
+        .get(&meta_type)
+        .map(|(data, size)| (*data as *mut std::ffi::c_void, *size))
+}
 
 /// Damage regions offered to consumers. A frame with more rects degrades
 /// to a single full-frame region: damage is a read-back hint and
@@ -93,17 +154,23 @@ pub(crate) fn monotonic_pts_nanos() -> i64 {
 ///
 /// # Safety
 /// `buffer` must be a live pool buffer of this stream.
-pub(crate) unsafe fn attach_header(buffer: *mut pw_sys::pw_buffer, seq: u64, pts_nanos: i64) {
-    let spa_buffer = unsafe { (*buffer).buffer };
-    if spa_buffer.is_null() {
+pub(crate) unsafe fn attach_header(
+    buffer: *mut pw_sys::pw_buffer,
+    snapshot: &BufferMetaSnapshot,
+    seq: u64,
+    pts_nanos: i64,
+) {
+    let Some((header, _)) = (unsafe { find_meta(buffer, spa_sys::SPA_META_Header, snapshot) })
+    else {
+        log::warn!(
+            "portal: pool buffer carries no Header meta; PTS/sequence not attached (seq {seq} lost)"
+        );
         return;
-    }
-    let meta = unsafe { spa_sys::spa_buffer_find_meta(spa_buffer, spa_sys::SPA_META_Header) };
-    if meta.is_null() {
-        return;
-    }
+    };
+    // SAFETY: the Header meta's data pointer names the `spa_meta_header`
+    // block in the negotiated layout.
     unsafe {
-        let header = meta.cast::<spa_sys::spa_meta_header>();
+        let header = header.cast::<spa_sys::spa_meta_header>();
         (*header).flags = 0;
         (*header).offset = 0;
         (*header).pts = pts_nanos;
@@ -124,20 +191,26 @@ pub(crate) unsafe fn attach_header(buffer: *mut pw_sys::pw_buffer, seq: u64, pts
 /// the consumer at this instant (the publish path queues it right after).
 pub(crate) unsafe fn attach_damage(
     buffer: *mut pw_sys::pw_buffer,
+    snapshot: &BufferMetaSnapshot,
     damage: &[aegis_portal_ipc::Rect],
     width: u32,
     height: u32,
 ) {
-    // SAFETY: `buffer` is live per the caller; its spa_buffer is valid.
-    let spa_buffer = unsafe { (*buffer).buffer };
-    if spa_buffer.is_null() {
+    // SAFETY: `buffer` is live per the caller; the snapshot was captured
+    // from its own `add_buffer` layout.
+    let Some((data, size)) =
+        (unsafe { find_meta(buffer, spa_sys::SPA_META_VideoDamage, snapshot) })
+    else {
         return;
-    }
-    // SAFETY: `spa_buffer` is live; the lookup only reads the meta array.
-    let meta = unsafe { spa_sys::spa_buffer_find_meta(spa_buffer, spa_sys::SPA_META_VideoDamage) };
-    if meta.is_null() {
-        return;
-    }
+    };
+    // Rebuild the `spa_meta` view `spa_meta_first`/`spa_meta_check` need:
+    // the live array's entry may have been zeroed, but the data pointer
+    // and size recorded at `add_buffer` still name the same block.
+    let meta = spa_sys::spa_meta {
+        type_: spa_sys::SPA_META_VideoDamage,
+        data,
+        size,
+    };
     // Over-capacity damage collapses to one full-frame region (see the
     // constant's docs).
     let full_frame;
@@ -156,6 +229,7 @@ pub(crate) unsafe fn attach_damage(
     // buffer; writes are bounded by `spa_meta_check`, which guards the
     // block's real capacity regardless of what was offered.
     unsafe {
+        let meta = &meta as *const spa_sys::spa_meta;
         let mut region = spa_sys::spa_meta_first(meta).cast::<spa_sys::spa_meta_region>();
         let mut index = 0;
         while spa_sys::spa_meta_check(region.cast::<std::ffi::c_void>(), meta) {

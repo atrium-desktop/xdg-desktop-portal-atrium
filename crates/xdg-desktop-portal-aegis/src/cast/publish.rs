@@ -45,7 +45,7 @@ fn reclaim_returned_buffers(stream: &pw::stream::Stream, data: &StreamData) {
             }
         } else {
             drop(transport);
-            data.pool.borrow_mut().push(raw.as_ptr());
+            data.pool.borrow_mut().push_back(raw.as_ptr());
         }
     }
 }
@@ -125,8 +125,14 @@ fn publish_slot(
             data.sequence.set(seq + 1);
             let pts = super::meta::monotonic_pts_nanos();
             unsafe {
-                super::meta::attach_header(pool_raw, seq, pts);
-                super::meta::attach_damage(pool_raw, damage, width, height);
+                let buffer_metas = data.buffer_metas.borrow();
+                let metas = buffer_metas
+                    .get(&(pool_raw as usize))
+                    .cloned()
+                    .unwrap_or_default();
+                drop(buffer_metas);
+                super::meta::attach_header(pool_raw, &metas, seq, pts);
+                super::meta::attach_damage(pool_raw, &metas, damage, width, height);
                 stream.queue_raw_buffer(pool_raw)
             };
         }

@@ -3,7 +3,7 @@
 //! table), the delivery negotiation, and the latest received frame.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 use aegis_portal_ipc::Client;
@@ -188,8 +188,15 @@ pub(crate) struct StreamData {
     pub(crate) transport: Rc<RefCell<Transport>>,
     pub(crate) negotiation: RefCell<Negotiation>,
     /// Unbound pool buffers dequeued in earlier cycles; the copy path
-    /// fills them.
-    pub(crate) pool: RefCell<Vec<*mut pw_sys::pw_buffer>>,
+    /// fills them. A dequeued order (FIFO): taking the OLDEST returned
+    /// buffer gives the consumer the longest window to observe the frame
+    /// just queued before its buffer is rewritten. LIFO reuse (a plain
+    /// Vec's tail pop) rewrites the same buffer the consumer most recently
+    /// returned, collapsing the pool to an effective depth of one — on
+    /// PipeWire 1.0.x that visibly drops every other frame of a
+    /// continuous stream (the consumer reads the buffer only after the
+    /// next write already replaced its contents).
+    pub(crate) pool: RefCell<VecDeque<*mut pw_sys::pw_buffer>>,
     /// Portal-owned memfd backing for copy-path pool buffers, keyed by
     /// `pw_buffer` pointer. With `ALLOC_BUFFERS` the producer supplies the
     /// pool memory; entries are unmapped at `remove_buffer` and teardown.
@@ -206,7 +213,23 @@ pub(crate) struct StreamData {
     pub(crate) dropped_frames: Cell<u64>,
     /// Rate-limit the unmappable-dmabuf warning to once per stream.
     pub(crate) warned_unmappable: Cell<bool>,
+    /// Meta blocks per pool buffer, snapshotted in `add_buffer`.
+    ///
+    /// PipeWire 1.0.x (the Ubuntu 24.04 baseline) zeroes the `type` field
+    /// of every `struct spa_meta` in a pool buffer's meta array once the
+    /// buffer has been through a consumer-return round trip, so a reused
+    /// buffer's `spa_buffer_find_meta` finds nothing and every subsequent
+    /// frame would ship a zeroed header (sequence 0, PTS 0). The snapshot
+    /// keys the same `meta.data` pointers by their original type, letting
+    /// the publish path attach Header/VideoDamage to a reused buffer
+    /// exactly as to a fresh one. Cleared by `remove_buffer`.
+    pub(crate) buffer_metas: RefCell<BufferMetaSnapshots>,
 }
+
+/// Meta blocks of one pool buffer, keyed by SPA meta type: `(data, size)`.
+pub(crate) type BufferMetaSnapshot = HashMap<u32, (usize, u32)>;
+/// Every pool buffer's meta snapshot, keyed by `pw_buffer` pointer.
+type BufferMetaSnapshots = HashMap<usize, BufferMetaSnapshot>;
 
 /// Tell the compositor a slot is reusable. Best-effort: the stream's
 /// teardown cleans up regardless.

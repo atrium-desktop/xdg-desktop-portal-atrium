@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.22] - 2026-08-23
+
+### Fixed
+
+- **Screencast frames carried a zeroed timestamp/sequence header on the Ubuntu 24.04 baseline.** Two independent defects, both reproduced against the documented PipeWire 1.0.5 / WirePlumber 0.4.17 baseline and both invisible on current PipeWire:
+  - PipeWire 1.0.x zeroes the `type` field of every `struct spa_meta` in a pool buffer's meta array once the buffer has been through a consumer-return round trip. The portal's publish path resolved `SPA_META_Header`/`SPA_META_VideoDamage` through the live array, so the first frame carried a correct PTS/sequence and every reused buffer shipped a zeroed header — consumers (OBS, encoders) read sequence 0 and PTS 0 forever. The portal now snapshots each buffer's meta array in `add_buffer` (data pointer + size per type) and resolves metas through that snapshot, attaching Header/VideoDamage to a reused buffer exactly as to a fresh one.
+  - The copy path's free-buffer pool reused buffers last-returned-first (a `Vec` tail pop). That rewrites the very buffer the consumer just gave back, collapsing the negotiated pool to an effective depth of one: a continuous stream visibly dropped every other frame on PipeWire 1.0.x, where the consumer observes a buffer only after the next write has already replaced its contents. The pool now dequeues oldest-first (`VecDeque`), restoring the full negotiated depth as a real pipeline.
+  - The multi-frame cadence test's own consumer offered `SPA_PARAM_Meta` pods in an order PipeWire 1.0.x's ParamMeta merge drops the Header offer from the negotiated layout entirely; the test consumer now offers Header first (verified: the layout then carries `[Busy, Header, VideoDamage]` where the previous order yielded `[Busy, VideoDamage]`).
+
 ## [0.0.21] - 2026-08-23
 
 ### Fixed
@@ -641,7 +650,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.21...HEAD
+[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.22...HEAD
+[0.0.22]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.22
 [0.0.21]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.21
 [0.0.20]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.20
 [0.0.19]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.19
