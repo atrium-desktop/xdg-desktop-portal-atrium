@@ -72,7 +72,10 @@ pub fn thumbnail_size(width: u32, height: u32) -> (u32, u32) {
 /// image pipeline samples, in place. Clamped per channel so the round trip
 /// through a lookup stays exact.
 pub fn premultiply_rgba(pixels: &mut [u8]) {
-    for px in pixels.chunks_exact_mut(4) {
+    // `as_chunks_mut` (clippy 1.98's chunks_exact_to_as_chunks): the slice
+    // length is always a whole number of pixels from the decoder.
+    let (chunks, _) = pixels.as_chunks_mut::<4>();
+    for px in chunks {
         let a = px[3] as u32;
         px[0] = ((px[0] as u32 * a + 127) / 255).min(255) as u8;
         px[1] = ((px[1] as u32 * a + 127) / 255).min(255) as u8;
