@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- The prompter child's stderr is now teed — forwarded live to the daemon's stderr as before, with its tail retained for failure reporting — so a prompter the dynamic loader refuses (exit 127, the signature of an optics soname bump landing without a prompter relink) answers the portal request with the loader's own line naming the missing library instead of a bare "exited with exit status: 127 and no response".
+- The notification daemon's death no longer wedges notifications permanently: the live-id map is cleared when the exited daemon is reaped, so a crashed daemon cannot fill the 256-id cap with ids whose cards died with it.
+- A `Request.Close` racing the backend's reply can no longer leave a stale cancellation marker in the request tracker (which would both leak one string per race and misreport a later request reusing the handle as cancelled): markers are only recorded while the request is still being served.
+
+### Changed
+
+- The Optics dependency set moved from the v0.0.19 tag to v0.0.25, matching the installed C libraries; the prompter now links `lib{flux,iris,lens}.so.0.0` (the major.minor compatibility boundary introduced by optics v0.0.25) instead of the retired `lib*.so.0` sonames.
+
 ## [0.0.20] - 2026-08-20
 
 ### Added

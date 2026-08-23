@@ -40,14 +40,14 @@ sha2 = "0.10"
 # monorepo release. Joint development against a sibling optics checkout uses
 # .cargo/optics-local.toml without making the sibling checkout mandatory for
 # CI (mirror of the Aegis workflow).
-iris = { git = "https://github.com/ming2k/optics", tag = "v0.0.19" }
-lens = { git = "https://github.com/ming2k/optics", tag = "v0.0.19" }
+iris = { git = "https://github.com/ming2k/optics", tag = "v0.0.25" }
+lens = { git = "https://github.com/ming2k/optics", tag = "v0.0.25" }
 # Direct -sys dependencies are how the terminal binary sees the
 # DEP_*_RPATHS metadata (published via the -sys crates' `links`) and can
 # re-emit the loader paths itself; see aegis-portal-prompter/build.rs.
-flux-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.19" }
-iris-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.19" }
-lens-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.19" }
+flux-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.25" }
+iris-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.25" }
+lens-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.25" }
 libc = "0.2"
 log = "0.4"
 mime_guess = "2"

@@ -26,6 +26,15 @@
 //! without a signal: one sleeping thread per open dialog is the accepted
 //! cost (an in-flight dialog is user-visible work, not idle load).
 //!
+//! ## Failure visibility
+//!
+//! The child's stderr is teed: forwarded live to the daemon's stderr
+//! (preserving ADR-0014's diagnostics channel) while its tail is retained
+//! for failure reporting. A child the dynamic loader refuses (exit 127,
+//! empty stdout) therefore surfaces the loader's own line — naming the
+//! missing library — inside the D-Bus error, not only in a journal line
+//! that may have rotated away by the time the failure is investigated.
+//!
 //! ## Response hygiene
 //!
 //! The response can carry a vault password: the read buffer is a
@@ -70,6 +79,64 @@ pub(crate) fn invoke(
     invoke_raw(request, cancellation)
 }
 
+/// Cap on the child's retained stderr when folding it into a failure
+/// message. Loader errors (the failure this exists for) are a single
+/// short line; the cap only stops a chatty diagnostics stream from
+/// inflating the D-Bus error.
+const STDERR_TAIL_BYTES: usize = 2048;
+
+/// Live-forward the child's stderr while retaining its last
+/// [`STDERR_TAIL_BYTES`] for failure reporting.
+///
+/// The prompter's stderr is its diagnostics channel (ADR-0014), and the
+/// dynamic loader reports a refused image there before the program ever
+/// starts — exit code 127 with no stdout. Forwarding preserves today's
+/// live journal stream; the tail moves the loader's own message into the
+/// D-Bus error, where it survives log rotation and is actionable (this
+/// is exactly how an optics soname bump presents when the prompter is
+/// not relinked).
+///
+/// The thread exits when the pipe reaches EOF: on child death, on
+/// [`terminate`](fn@terminate), or after a normal exit. It must be
+/// joined on every return path or a slow stderr writer could outlive the
+/// request.
+fn spawn_stderr_tail(stderr: std::process::ChildStderr) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut tail: Vec<u8> = Vec::new();
+        let mut chunk = [0_u8; 512];
+        let mut sink = std::io::stderr();
+        let mut stderr = stderr;
+        loop {
+            match stderr.read(&mut chunk) {
+                Ok(0) | Err(_) => return tail,
+                Ok(read) => {
+                    let _ = sink.write_all(&chunk[..read]);
+                    tail.extend_from_slice(&chunk[..read]);
+                    let excess = tail.len().saturating_sub(STDERR_TAIL_BYTES);
+                    if excess > 0 {
+                        tail.drain(..excess);
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Fold a retained stderr tail into one diagnostic line.
+fn stderr_diagnostic(tail: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(tail);
+    let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+    let first = lines.next()?;
+    let hint = "the prompter image could not be started — usually a shared library it was \
+                linked against is missing or was replaced under it; rebuild and reinstall the \
+                prompter against the installed optics release";
+    Some(match lines.next() {
+        Some(second) => format!("{first}; {second} ({hint})"),
+        None => format!("{first} ({hint})"),
+    })
+}
+
 /// Spawn the prompter and speak the one-shot contract without touching
 /// the request.
 fn invoke_raw(
@@ -80,20 +147,28 @@ fn invoke_raw(
     let mut child = Command::new(&executable)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| {
             InvokeError::Failed(format!("could not start {}: {error}", executable.display()))
         })?;
 
+    // Take the pipes out of `child` before any early return: each of the
+    // three drainers (stdin write, stdout reader, stderr tail) must be
+    // dropped or joined on every path, or a pipe writer outlives the
+    // request. The stderr tail is started first so the early-return paths
+    // below have exactly one handle to join.
+    let stderr_tail = spawn_stderr_tail(child.stderr.take().expect("stderr was piped above"));
     let Some(mut stdin) = child.stdin.take() else {
         terminate(&mut child);
+        let _ = stderr_tail.join();
         return Err(InvokeError::Failed(
             "prompter stdin was not piped".to_owned(),
         ));
     };
     let Some(stdout) = child.stdout.take() else {
         terminate(&mut child);
+        let _ = stderr_tail.join();
         return Err(InvokeError::Failed(
             "prompter stdout was not piped".to_owned(),
         ));
@@ -103,6 +178,7 @@ fn invoke_raw(
         .and_then(|()| stdin.write_all(b"\n").map_err(|error| error.to_string()));
     if let Err(error) = send_result {
         terminate(&mut child);
+        let _ = stderr_tail.join();
         return Err(InvokeError::Failed(format!(
             "could not send prompter request: {error}"
         )));
@@ -126,6 +202,7 @@ fn invoke_raw(
         if cancellation.is_some_and(|cancelled| cancelled()) {
             terminate(&mut child);
             let _ = reader.join();
+            let _ = stderr_tail.join();
             return Err(InvokeError::Cancelled);
         }
         match child.try_wait() {
@@ -134,6 +211,7 @@ fn invoke_raw(
             Err(error) => {
                 terminate(&mut child);
                 let _ = reader.join();
+                let _ = stderr_tail.join();
                 return Err(InvokeError::Failed(format!(
                     "could not wait for prompter: {error}"
                 )));
@@ -146,15 +224,30 @@ fn invoke_raw(
         .map_err(|error| {
             InvokeError::Failed(format!("could not read prompter response: {error}"))
         })?;
+    // Join the stderr drainer after the response is read: the child has
+    // exited, so its pipe is at EOF and the join is immediate. Joining
+    // before the stdout read could deadlock a child blocked writing
+    // stderr ahead of its response.
+    let stderr_tail = stderr_tail.join().unwrap_or_default();
     if bytes.len() as u64 > MAX_MESSAGE_BYTES {
         return Err(InvokeError::Failed(
             "prompter response exceeds the 8 MiB process-contract limit".into(),
         ));
     }
     if bytes.is_empty() {
-        return Err(InvokeError::Failed(format!(
-            "prompter exited with {status} and no response"
-        )));
+        // Exit code 127 is the dynamic loader's refusal: it cannot come
+        // from the prompter's own code (usage errors are 2, contract
+        // failures 1). Fold the loader's own stderr line into the error
+        // so the failure names the missing library instead of a bare
+        // status — this is how an optics soname bump presents when the
+        // prompter is not relinked.
+        let diagnostic = (status.code() == Some(127))
+            .then(|| stderr_diagnostic(&stderr_tail))
+            .flatten();
+        return Err(InvokeError::Failed(match diagnostic {
+            Some(diagnostic) => format!("prompter exited with {status}: {diagnostic}"),
+            None => format!("prompter exited with {status} and no response"),
+        }));
     }
     // The read buffer has reached its final size and is only borrowed from
     // here on; pin it against swapping while the response (which can carry
@@ -367,6 +460,62 @@ mod tests {
             panic!("expected Failed, got {error:?}");
         };
         assert!(message.contains("no response"), "unexpected: {message}");
+    }
+
+    #[test]
+    fn a_loader_refusal_names_the_missing_library() {
+        let dir = temp_dir("loader127");
+        // Reproduce the dynamic loader's refusal shape: exit 127 with the
+        // loader's own stderr line and no stdout. The tee must fold that
+        // line into the D-Bus error.
+        let script = fake_prompter(
+            &dir,
+            "loader127.sh",
+            "echo '/usr/libexec/aegis-portal-prompter: error while loading shared libraries: \
+             libflux.so.0: cannot open shared object file: No such file or directory' >&2\n\
+             exit 127",
+        );
+        let override_env = PrompterOverride::install();
+        override_env.point_at(&script);
+        let error = invoke(confirm_request(), None, None)
+            .expect_err("a loader-refused prompter must not succeed");
+        let _ = std::fs::remove_dir_all(&dir);
+        let InvokeError::Failed(message) = error else {
+            panic!("expected Failed, got {error:?}");
+        };
+        assert!(
+            message.contains("libflux.so.0"),
+            "the error must name the missing library: {message}"
+        );
+        assert!(
+            message.contains("error while loading shared libraries"),
+            "the error must carry the loader's own line: {message}"
+        );
+    }
+
+    #[test]
+    fn a_silent_exit_127_still_reports_the_status() {
+        let dir = temp_dir("silent127");
+        // Nothing on stderr: the diagnostic folding has nothing to add,
+        // so the status alone must still be reported (the pre-tee
+        // behaviour).
+        let script = fake_prompter(&dir, "silent127.sh", "exit 127");
+        let override_env = PrompterOverride::install();
+        override_env.point_at(&script);
+        let error =
+            invoke(confirm_request(), None, None).expect_err("a silent 127 must not succeed");
+        let _ = std::fs::remove_dir_all(&dir);
+        let InvokeError::Failed(message) = error else {
+            panic!("expected Failed, got {error:?}");
+        };
+        assert!(
+            message.contains("exit status: 127"),
+            "unexpected: {message}"
+        );
+        assert!(
+            !message.contains("shared libraries"),
+            "no diagnostic must be invented: {message}"
+        );
     }
 
     #[test]

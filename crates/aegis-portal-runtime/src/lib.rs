@@ -23,6 +23,10 @@ pub type ResponseSender = async_channel::Sender<PortalResponse>;
 /// capture worker.
 #[derive(Default)]
 pub struct RequestTracker {
+    /// Request paths currently served (between `register` and `finish`).
+    /// The membership test is what makes a late `Close` harmless: the
+    /// marker is only recorded for a request that is still in flight.
+    active: HashSet<String>,
     closed: HashSet<String>,
 }
 
@@ -32,8 +36,30 @@ impl RequestTracker {
         self.closed.contains(path)
     }
 
+    /// Record the request as served. Called by [`register`] after the
+    /// object is exported.
+    fn activate(&mut self, path: &str) {
+        self.active.insert(path.to_owned());
+    }
+
+    /// Record a `Close`, unless the request already finished.
+    ///
+    /// `Close` and `finish` race in the executor: a client can dispatch
+    /// `Close` in the window after the backend already replied and
+    /// removed the object. Recording that marker anyway would leave a
+    /// string in `closed` that nothing ever forgets (the request's
+    /// `finish` has already run), and a *reused* handle would then be
+    /// misreported as cancelled. Both operations take this crate's mutex,
+    /// so the membership test serializes correctly against `forget`.
+    fn mark_closed(&mut self, path: &str) {
+        if self.active.contains(path) {
+            self.closed.insert(path.to_owned());
+        }
+    }
+
     /// Drop all state for a finished request.
     fn forget(&mut self, path: &str) {
+        self.active.remove(path);
         self.closed.remove(path);
     }
 }
@@ -48,9 +74,7 @@ struct RequestIface {
 impl RequestIface {
     async fn close(&self) -> zbus::fdo::Result<()> {
         log::info!("portal: request {} closed by client", self.path);
-        sync::lock(&self.tracker, "request tracker")
-            .closed
-            .insert(self.path.clone());
+        sync::lock(&self.tracker, "request tracker").mark_closed(&self.path);
         Ok(())
     }
 }
@@ -79,6 +103,7 @@ pub async fn register(
             "request handle {path} is already active"
         )));
     }
+    sync::lock(tracker, "request tracker").activate(path);
     Ok(())
 }
 
@@ -150,7 +175,8 @@ mod tests {
     fn tracker_records_and_forgets_closes() {
         let mut tracker = RequestTracker::default();
         assert!(!tracker.was_closed("/r/1"));
-        tracker.closed.insert("/r/1".to_string());
+        tracker.activate("/r/1");
+        tracker.mark_closed("/r/1");
         assert!(tracker.was_closed("/r/1"));
         tracker.forget("/r/1");
         assert!(!tracker.was_closed("/r/1"));
@@ -163,8 +189,35 @@ mod tests {
             path: "/r/1".to_string(),
             tracker: Arc::clone(&tracker),
         };
+        // Close is only meaningful while the request is served.
+        sync::lock(&tracker, "test tracker").activate("/r/1");
         zbus::block_on(iface.close()).expect("Close answers Ok");
         assert!(sync::lock(&tracker, "test tracker").was_closed("/r/1"));
+    }
+
+    #[test]
+    fn a_close_after_finish_is_ignored_and_cannot_poison_a_reused_handle() {
+        let mut tracker = RequestTracker::default();
+        tracker.activate("/r/race");
+        tracker.mark_closed("/r/race");
+        tracker.forget("/r/race");
+        // A Close dispatched in the window after `finish` removed the
+        // object must not leave a marker behind …
+        tracker.mark_closed("/r/race");
+        assert!(
+            !tracker.was_closed("/r/race"),
+            "a late Close must not be recorded"
+        );
+        // … and a later request reusing the handle starts clean.
+        tracker.activate("/r/race");
+        assert!(
+            !tracker.was_closed("/r/race"),
+            "a reused handle must not inherit a stale marker"
+        );
+        // Active bookkeeping is dropped with the request, so repeated
+        // handle reuse cannot grow either set.
+        tracker.forget("/r/race");
+        assert!(!tracker.was_closed("/r/race"));
     }
 
     /// A private session bus (a spawned `dbus-daemon`), mirroring the
@@ -232,9 +285,7 @@ mod tests {
         let conn = connect(&bus);
         let tracker = Arc::new(Mutex::new(RequestTracker::default()));
         zbus::block_on(register(&conn, &tracker, "/r/fin")).expect("register succeeds");
-        sync::lock(&tracker, "test tracker")
-            .closed
-            .insert("/r/fin".to_string());
+        sync::lock(&tracker, "test tracker").mark_closed("/r/fin");
         zbus::block_on(finish(&conn, &tracker, "/r/fin"));
         assert!(
             !sync::lock(&tracker, "test tracker").was_closed("/r/fin"),

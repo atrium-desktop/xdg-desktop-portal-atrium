@@ -297,6 +297,14 @@ impl LiveNotifications {
         }
         removed.is_some()
     }
+
+    /// Forget every tracked id, returning how many were live. Called when
+    /// the daemon they were shown by dies: its cards are gone with it.
+    fn clear(&mut self) -> usize {
+        let forgotten = self.total();
+        self.per_app.clear();
+        forgotten
+    }
 }
 
 /// One running daemon: its stdin (command sink), the child handle (liveness
@@ -449,6 +457,16 @@ impl DaemonManager {
                 Ok(None) => return true,
                 Ok(Some(status)) => {
                     log::warn!("portal: notification daemon exited with {status}");
+                    // The cards died with the daemon: every live-id it
+                    // tracked is gone. Forget them here or the map only
+                    // ever grows (a dead daemon reports no `Closed`
+                    // events), and once it reaches `MAX_TOTAL_IDS` the
+                    // portal refuses notifications forever — a
+                    // functional outage long outliving the crash.
+                    let forgotten = sync::lock(&self.live, "live notifications").clear();
+                    log::info!(
+                        "portal: forgot {forgotten} notification ids that died with the daemon"
+                    );
                     self.daemon = None;
                 }
                 Err(error) => {
@@ -732,6 +750,23 @@ mod tests {
         assert!(live.remove("app", "n0"));
         assert!(!live.remove("app", "n0"));
         assert!(!live.remove("ghost", "n0"));
+    }
+
+    #[test]
+    fn a_dead_daemon_forgets_all_live_ids() {
+        let mut live = LiveNotifications::default();
+        live.track("app-a", "1");
+        live.track("app-a", "2");
+        live.track("app-b", "3");
+        assert_eq!(live.total(), 3);
+        // The daemon's death retires every card it was showing.
+        assert_eq!(live.clear(), 3);
+        assert_eq!(live.total(), 0);
+        // Clearing an empty map is a no-op, and tracking works again
+        // afterwards (the saturation outage is not permanent).
+        assert_eq!(live.clear(), 0);
+        assert!(live.track("app-a", "4").is_none());
+        assert_eq!(live.total(), 1);
     }
 
     #[test]

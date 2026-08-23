@@ -729,7 +729,7 @@ dependencies = [
 [[package]]
 name = "flux"
 version = "0.1.1"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.19#ea9e0e86df1a3793ee67f6a440f1ee77e7873d69"
+source = "git+https://github.com/ming2k/optics?tag=v0.0.25#9c6d240266d8d338fc751afe7074159b6ffea2a7"
 dependencies = [
  "flux-sys",
 ]
@@ -737,7 +737,7 @@ dependencies = [
 [[package]]
 name = "flux-sys"
 version = "0.1.1"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.19#ea9e0e86df1a3793ee67f6a440f1ee77e7873d69"
+source = "git+https://github.com/ming2k/optics?tag=v0.0.25#9c6d240266d8d338fc751afe7074159b6ffea2a7"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -926,7 +926,7 @@ dependencies = [
 [[package]]
 name = "iris"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.19#ea9e0e86df1a3793ee67f6a440f1ee77e7873d69"
+source = "git+https://github.com/ming2k/optics?tag=v0.0.25#9c6d240266d8d338fc751afe7074159b6ffea2a7"
 dependencies = [
  "iris-sys",
  "lens",
@@ -936,7 +936,7 @@ dependencies = [
 [[package]]
 name = "iris-sys"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.19#ea9e0e86df1a3793ee67f6a440f1ee77e7873d69"
+source = "git+https://github.com/ming2k/optics?tag=v0.0.25#9c6d240266d8d338fc751afe7074159b6ffea2a7"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -1013,7 +1013,7 @@ dependencies = [
 [[package]]
 name = "lens"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.19#ea9e0e86df1a3793ee67f6a440f1ee77e7873d69"
+source = "git+https://github.com/ming2k/optics?tag=v0.0.25#9c6d240266d8d338fc751afe7074159b6ffea2a7"
 dependencies = [
  "flux",
  "lens-sys",
@@ -1022,7 +1022,7 @@ dependencies = [
 [[package]]
 name = "lens-sys"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.19#ea9e0e86df1a3793ee67f6a440f1ee77e7873d69"
+source = "git+https://github.com/ming2k/optics?tag=v0.0.25#9c6d240266d8d338fc751afe7074159b6ffea2a7"
 dependencies = [
  "bindgen",
  "pkg-config",
