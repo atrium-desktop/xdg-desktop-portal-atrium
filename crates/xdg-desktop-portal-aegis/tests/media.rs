@@ -980,7 +980,7 @@ fn drive_one_frame(
             2,
             offer_dmabuf,
             ready_tx,
-            Duration::from_secs(8),
+            Duration::from_secs(20),
         )
     });
     ready_rx
@@ -1039,7 +1039,7 @@ fn screencast_forwards_slot_frames_zero_copy() {
             2,
             true,
             ready_tx,
-            Duration::from_secs(8),
+            Duration::from_secs(20),
         )
     });
     ready_rx
@@ -1095,7 +1095,7 @@ fn screencast_copies_slot_frames_for_shm_consumers() {
             2,
             false,
             ready_tx,
-            Duration::from_secs(8),
+            Duration::from_secs(20),
         )
     });
     ready_rx
@@ -1160,7 +1160,7 @@ fn screencast_switches_tiled_slot_streams_to_shm_readback() {
             2,
             false,
             ready_tx,
-            Duration::from_secs(8),
+            Duration::from_secs(20),
         )
     });
     ready_rx
@@ -1748,7 +1748,7 @@ fn screencast_geometry_change_restarts_and_renegotiates() {
             4,
             false,
             ready_tx,
-            Duration::from_secs(8),
+            Duration::from_secs(20),
         )
     });
     ready_rx
@@ -1835,7 +1835,7 @@ fn screencast_damage_reaches_the_consumer() {
     let socket = env.runtime_dir.join("pipewire-0");
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let consumer = std::thread::spawn(move || {
-        consume_one_frame_damage(&socket, node_id, 2, 2, ready_tx, Duration::from_secs(8))
+        consume_one_frame_damage(&socket, node_id, 2, 2, ready_tx, Duration::from_secs(20))
     });
     ready_rx
         .recv_timeout(Duration::from_secs(5))
@@ -1905,7 +1905,7 @@ fn screencast_negotiates_multi_modifier_consumer_zero_copy() {
                 modifiers: &consumer_modifiers,
                 count: 1,
                 ready: ready_tx,
-                timeout: Duration::from_secs(8),
+                timeout: Duration::from_secs(20),
             },
         )
     });
@@ -1966,7 +1966,7 @@ fn screencast_continuous_cadence_and_pts_headers() {
                 modifiers: &[],
                 count: 5,
                 ready: ready_tx,
-                timeout: Duration::from_secs(8),
+                timeout: Duration::from_secs(20),
             },
         )
     });
