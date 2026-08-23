@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.21] - 2026-08-23
+
 ### Fixed
 
 - The prompter child's stderr is now teed — forwarded live to the daemon's stderr as before, with its tail retained for failure reporting — so a prompter the dynamic loader refuses (exit 127, the signature of an optics soname bump landing without a prompter relink) answers the portal request with the loader's own line naming the missing library instead of a bare "exited with exit status: 127 and no response".
@@ -12,7 +14,7 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
-- The Optics dependency set moved from the v0.0.19 tag to v0.0.25, matching the installed C libraries; the prompter now links `lib{flux,iris,lens}.so.0.0` (the major.minor compatibility boundary introduced by optics v0.0.25) instead of the retired `lib*.so.0` sonames.
+- The Optics dependency set moved from the v0.0.19 tag to v0.0.26, matching the installed C libraries; the prompter now links `lib{flux,iris,lens}.so.0.0` (the major.minor compatibility boundary introduced by optics v0.0.25) instead of the retired `lib*.so.0` sonames. v0.0.26 is binary-compatible (patch release on the `0.0` soname); it brings the canvas hot-path lock elision and the continuous Wayland scroll channel.
 
 ## [0.0.20] - 2026-08-20
 
@@ -639,7 +641,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.20...HEAD
+[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.21...HEAD
+[0.0.21]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.21
 [0.0.20]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.20
 [0.0.19]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.19
 [0.0.18]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.18
