@@ -1987,7 +1987,15 @@ fn screencast_continuous_cadence_and_pts_headers() {
             dropped: 0,
             pixels: pixels.to_vec().into(),
         }));
-        std::thread::sleep(Duration::from_millis(10));
+        // The stream is latest-wins: a frame still pending publication is
+        // dropped when the next one replaces it (that is the designed
+        // backpressure behaviour a slow consumer needs). A real screen
+        // cadence gives the portal's PipeWire loop time to publish each
+        // frame before its successor lands, so the consumer observes five
+        // distinct frames; a 10 ms burst only asserts that five pushes in
+        // one loop cycle collapse to the last, which races on slow
+        // runners.
+        std::thread::sleep(Duration::from_millis(150));
     }
 
     let frames = consumer
