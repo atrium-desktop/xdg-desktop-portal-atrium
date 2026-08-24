@@ -4,9 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.23] - 2026-08-24
+
 ### Changed
 
-- **The secret vault's lock state now follows the desktop's session lock boundary instead of a 15-minute idle timer** ([ADR-0019](docs/adr/0019-vault-lock-follows-the-session-lock-boundary.md)). The backend subscribes to logind's `Session.Lock`/`Session.Unlock` signals (and `PrepareForSleep`) and zeroizes the vault master key when the session locks or the system suspends, re-unlocking when it returns. The old watcher measured "no application read a secret", not "the user left": it locked mid-session while the user worked and held the key in RAM through a real screen lock, and on a keyfile-mode vault its unlock prompt could never succeed (there is no password to type).
+- Promoted the Optics dependency set from `v0.0.26` to `v0.0.27`, matching the installed C libraries. v0.0.27 is binary-compatible (patch release on the `0.0` soname); it repairs the glyph-atlas page-0 image leak on `atlas_clear` (a 16 MiB dedicated `VkDeviceMemory` per clear, the leak that grew the prompter's RSS over long sessions with CJK input) and two lens ghost-snapshot defects (a ghost-only fade stalling once the base tree was clean; snapshot command counts corrupting the heap under OOM truncation).
+
+- **The secret vault's lock state now follows the desktop's session lock boundary instead of a 15-minute idle timer** ([ADR-0019](docs/adr/0019-vault-lock-follows-the-session-lock-boundary.md)). The backend subscribes to logind's `Session.Lock`/`Session.Unlock` signals (and `PrepareForSleep`) and zeroizes the vault master key when the session locks or the system suspends, re-unlocking when it returns. The old watcher measured "no app read a secret", not "the user left": it locked mid-session while the user worked and held the key in RAM through a real screen lock, and on a keyfile-mode vault its unlock prompt could never succeed (there is no password to type).
 - Keyfile-mode vaults re-unlock from `vault.key` when the session returns — silently, with the same fail-closed validation as startup — so a locked keyfile vault no longer produces a dead-end password prompt for waiting `RetrieveSecret` callers; the request is served from the keyfile.
 - Password-mode vaults stay locked when the session returns and are re-opened by a PAM token or the masked prompt; the PAM-token watcher now runs for the daemon's lifetime (it previously exited permanently when the vault happened to be unlocked at startup, so tokens planted after a later lock were never consumed).
 - A lock now dismisses unlock requests queued behind the prompt instead of answering them from a vault the user never re-authorized after the lock.
@@ -657,7 +661,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.22...HEAD
+[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.23...HEAD
+[0.0.23]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.23
 [0.0.22]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.22
 [0.0.21]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.21
 [0.0.20]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.20
