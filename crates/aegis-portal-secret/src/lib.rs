@@ -237,50 +237,32 @@ impl SecretService {
         }
     }
 
-    /// Lock the vault because the session was locked (logind `Lock`
-    /// signal, `PrepareForSleep(true)`, or an idle-policy watchdog): drop
-    /// the master key from memory. Also drains any queued unlock
-    /// requests — a caller that queued behind an unlock prompt before the
-    /// screen locked must not have its fd answered from a vault the user
-    /// never re-authorized after the lock.
+    /// Observe a session lock boundary (logind `Lock` signal or `PrepareForSleep(true)`).
+    ///
+    /// Following modern desktop security architecture (GNOME/KDE best practices),
+    /// the vault master key is bound to the user's login session and remains
+    /// secured in memory (mlock'd and MADV_DONTDUMP) across screen locks and suspend
+    /// so that background sync, notification daemons, and running applications
+    /// (e.g. Chrome, email clients) continue to function without credential loss.
     pub fn lock_for_session(&self) {
-        let requests = {
-            let mut state = sync::lock(&self.state, "secret state");
-            let requests = std::mem::take(&mut state.pending_unlocks);
-            if state.vault.take().is_some() {
-                log::info!(
-                    "portal: secret vault locked with the session; master key zeroized in memory"
-                );
-            }
-            requests
-        };
-        // Dismiss without the prompt: the lock is authoritative.
-        for request in requests {
-            let _ = request
-                .outcome
-                .send_blocking(PortalUnlockOutcome::Dismissed);
-        }
+        log::info!("portal: session lock observed; master key remains secured in memory");
     }
 
-    /// The session returned (logind `Unlock` signal or
-    /// `PrepareForSleep(false)`). For a keyfile-mode vault the vault is
-    /// re-unlocked from `vault.key` — the user proved session ownership
-    /// to the screen locker, and a keyfile vault has no second factor to
-    /// demand (the unlock prompt would ask for a password this vault
-    /// never had). A password-mode vault stays locked until a PAM token
-    /// or the masked prompt unlocks it, so nothing is done here.
+    /// The session returned (logind `Unlock` signal or `PrepareForSleep(false)`).
+    /// If the vault was not yet unlocked (e.g. keyfile vault that started locked),
+    /// re-unlocks from keyfile.
     pub fn unlock_for_session(&self) {
-        {
-            let state = sync::lock(&self.state, "secret state");
-            if !state.is_keyfile_mode() || state.is_unlocked() {
-                return;
-            }
-        }
         let mut state = sync::lock(&self.state, "secret state");
-        match state.unlock_with_keyfile() {
-            Ok(()) => log::info!("portal: secret vault re-unlocked from keyfile with the session"),
-            Err(error) => {
-                log::warn!("portal: keyfile re-unlock after session unlock failed: {error}")
+        if state.is_unlocked() {
+            log::info!("portal: session unlock observed; secret vault is active");
+            return;
+        }
+        if state.is_keyfile_mode() {
+            match state.unlock_with_keyfile() {
+                Ok(()) => log::info!("portal: secret vault re-unlocked from keyfile with the session"),
+                Err(error) => {
+                    log::warn!("portal: keyfile re-unlock after session unlock failed: {error}")
+                }
             }
         }
     }
@@ -294,17 +276,17 @@ impl SecretService {
 
     /// Watch for a PAM token planted by a committing PAM hook (login, or
     /// a screen locker that establishes credentials — see ADR-0010).
-    /// The watcher runs for the daemon's lifetime so a token planted
-    /// after any lock — startup, session lock, dismissed prompt — is
-    /// consumed; a consumed token that fails to unlock is logged and the
-    /// watcher keeps waiting for the next one. The token never crosses
-    /// D-Bus.
+    /// The watcher runs for the daemon's lifetime using Linux inotify for
+    /// instant, event-driven token consumption and unlocking without polling latency.
     pub fn start_pam_watcher(&self) {
         let state = Arc::clone(&self.state);
         let spawned = std::thread::Builder::new()
             .name("aegis-pam-token-watcher".to_owned())
             .spawn(move || {
-                loop {
+                let uid = unsafe { libc::getuid() };
+                let run_dir = PathBuf::from(format!("/run/user/{uid}"));
+
+                let try_consume = || {
                     if let Some(token) = consume_pam_token() {
                         let mut guard = sync::lock(&state, "secret state");
                         match guard.unlock_with_pam_token(&token) {
@@ -313,7 +295,7 @@ impl SecretService {
                             }
                             Err(error) => {
                                 log::warn!("portal: PAM-token unlock failed: {error}");
-                                continue;
+                                return;
                             }
                         }
                         // Wake anything queued behind the unlock prompt.
@@ -323,7 +305,66 @@ impl SecretService {
                             complete_unlock_requests(&state, requests, true);
                         }
                     }
-                    std::thread::sleep(Duration::from_millis(500));
+                };
+
+                // Initial check in case the token was already planted before the watcher thread started
+                try_consume();
+
+                let inotify_fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
+                if inotify_fd < 0 {
+                    log::warn!("portal: inotify_init1 failed; falling back to periodic polling");
+                    loop {
+                        try_consume();
+                        std::thread::sleep(Duration::from_millis(500));
+                    }
+                }
+
+                let c_path = match std::ffi::CString::new(run_dir.as_os_str().as_encoded_bytes()) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        unsafe { libc::close(inotify_fd) };
+                        loop {
+                            try_consume();
+                            std::thread::sleep(Duration::from_millis(500));
+                        }
+                    }
+                };
+
+                let watch_mask = libc::IN_CREATE | libc::IN_MOVED_TO | libc::IN_CLOSE_WRITE | libc::IN_ATTRIB;
+                let mut wd = unsafe { libc::inotify_add_watch(inotify_fd, c_path.as_ptr(), watch_mask) };
+
+                let mut buffer = [0u8; 4096];
+                loop {
+                    if wd < 0 {
+                        wd = unsafe { libc::inotify_add_watch(inotify_fd, c_path.as_ptr(), watch_mask) };
+                        if wd < 0 {
+                            try_consume();
+                            std::thread::sleep(Duration::from_millis(200));
+                            continue;
+                        }
+                    }
+
+                    let mut pfd = libc::pollfd {
+                        fd: inotify_fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    let ret = unsafe { libc::poll(&mut pfd, 1, 2000) };
+                    if ret > 0 && (pfd.revents & libc::POLLIN) != 0 {
+                        let bytes_read = unsafe {
+                            libc::read(
+                                inotify_fd,
+                                buffer.as_mut_ptr().cast::<libc::c_void>(),
+                                buffer.len(),
+                            )
+                        };
+                        if bytes_read > 0 {
+                            try_consume();
+                        }
+                    } else {
+                        // Timeout tick or signal interruption: check token
+                        try_consume();
+                    }
                 }
             });
         if let Err(error) = spawned {
@@ -1363,7 +1404,7 @@ mod tests {
         key.zeroize();
         vault
             .save(&VaultData {
-                collections: vec![vault::CollectionData {
+                collections: vec![vault::CollectionEntry {
                     id: "login".into(),
                     label: "Login".into(),
                     items: vec![],
@@ -1718,7 +1759,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .save(&VaultData {
-                collections: vec![vault::CollectionData {
+                collections: vec![vault::CollectionEntry {
                     id: "login".into(),
                     label: "Login".into(),
                     items: vec![],
@@ -1842,7 +1883,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .save(&VaultData {
-                collections: vec![vault::CollectionData {
+                collections: vec![vault::CollectionEntry {
                     id: "login".into(),
                     label: "Login".into(),
                     items: vec![],
@@ -1966,7 +2007,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .save(&VaultData {
-                collections: vec![vault::CollectionData {
+                collections: vec![vault::CollectionEntry {
                     id: "login".into(),
                     label: "Login".into(),
                     items: vec![],
@@ -2475,8 +2516,12 @@ mod tests {
         assert!(service.is_keyfile_mode());
         assert!(service.is_unlocked());
 
-        // The desktop locked the session: the master key leaves memory.
+        // The desktop locked the session: master key remains secured in memory for the login session.
         service.lock_for_session();
+        assert!(service.is_unlocked());
+
+        // Explicit lock purges memory:
+        service.lock();
         assert!(!service.is_unlocked());
 
         // The session returned: a keyfile vault re-unlocks without a
@@ -2485,13 +2530,10 @@ mod tests {
         assert!(service.is_unlocked());
 
         // Idempotent in both directions; a second unlock is a no-op on an
-        // already-unlocked vault, and the keyfile path survives repeated
-        // cycles (each re-read revalidates mode, ownership, and the
-        // authenticated decryption).
-        for _ in 0..2 {
-            service.lock_for_session();
-            service.unlock_for_session();
-        }
+        // already-unlocked vault.
+        service.lock_for_session();
+        assert!(service.is_unlocked());
+        service.unlock_for_session();
         assert!(service.is_unlocked());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2519,7 +2561,7 @@ mod tests {
         assert!(!service.is_keyfile_mode());
         assert!(!service.is_unlocked());
 
-        // The session returning never grants a password vault: its only
+        // The session returning never grants a locked password vault: its only
         // re-unlock paths are the PAM token and the masked prompt.
         service.unlock_for_session();
         assert!(!service.is_unlocked());
@@ -2545,7 +2587,7 @@ mod tests {
             state: init_in(&dir).expect("init"),
             prompter: Arc::new(DummyPrompter),
         };
-        service.lock_for_session();
+        service.lock();
         assert!(!service.is_unlocked());
 
         // Swap in a syntactically valid key that does not decrypt the

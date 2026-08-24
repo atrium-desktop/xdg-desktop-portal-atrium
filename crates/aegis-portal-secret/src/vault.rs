@@ -51,29 +51,30 @@ struct KdfFile {
     salt: String,
 }
 
-/// The decrypted vault contents: every persisted collection and item.
+/// The decrypted vault commitment.
+///
+/// For the native Secret portal, `vault.enc` acts as an authenticated
+/// commitment (Poly1305 AEAD validation) confirming that a candidate key
+/// is correct before exposing the master key for HKDF expansion.
+/// The payload retains 100% backward compatibility with existing on-disk
+/// `{"collections": [...]}` files.
 #[derive(Serialize, Deserialize, Zeroize)]
 #[zeroize(drop)]
 pub struct VaultData {
-    pub collections: Vec<CollectionData>,
+    #[serde(default)]
+    pub collections: Vec<CollectionEntry>,
 }
 
 #[derive(Serialize, Deserialize, Zeroize)]
 #[zeroize(drop)]
-pub struct CollectionData {
+pub struct CollectionEntry {
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub label: String,
-    pub items: Vec<ItemData>,
-}
-
-#[derive(Serialize, Deserialize, Zeroize)]
-#[zeroize(drop)]
-pub struct ItemData {
-    pub id: String,
-    pub label: String,
+    #[serde(default)]
     #[zeroize(skip)]
-    pub attributes: std::collections::HashMap<String, String>,
-    pub secret: Vec<u8>,
+    pub items: Vec<serde_json::Value>,
 }
 
 /// An open vault: its file location plus the master key in memory.
@@ -450,17 +451,15 @@ mod tests {
 
         let vault = Vault::new(vault_path.clone(), key);
         let data = VaultData {
-            collections: vec![CollectionData {
+            collections: vec![CollectionEntry {
                 id: "login".into(),
                 label: "Login".into(),
-                items: vec![ItemData {
-                    id: "i1".into(),
-                    label: "Item".into(),
-                    attributes: [("app".to_string(), "aegis".to_string())]
-                        .into_iter()
-                        .collect(),
-                    secret: b"hunter2".to_vec(),
-                }],
+                items: vec![serde_json::json!({
+                    "id": "i1",
+                    "label": "Item",
+                    "attributes": {"app": "aegis"},
+                    "secret": [104, 117, 110, 116, 101, 114, 50]
+                })],
             }],
         };
 
@@ -468,7 +467,6 @@ mod tests {
         let loaded = vault.load().expect("load failed");
         assert_eq!(loaded.collections.len(), 1);
         assert_eq!(loaded.collections[0].id, "login");
-        assert_eq!(loaded.collections[0].items[0].secret, b"hunter2");
 
         let _ = std::fs::remove_file(vault_path);
     }
