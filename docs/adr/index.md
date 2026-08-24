@@ -20,3 +20,4 @@
 | [0016](0016-screencast-runtime-protocol-29.md) | The ScreenCast runtime surface for protocol 29 | Accepted |
 | [0017](0017-file-chooser-image-preview.md) | The FileChooser previews images in the prompter | Accepted |
 | [0018](0018-compositor-appearance-and-adaptive-sizing.md) | Compositor-owned appearance and adaptive dialog sizing | Accepted |
+| [0019](0019-vault-lock-follows-the-session-lock-boundary.md) | The vault lock state follows the session lock boundary | Accepted |

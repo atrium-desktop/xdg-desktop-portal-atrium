@@ -22,7 +22,7 @@ use std::os::fd::OwnedFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use aegis_portal_runtime::sync;
 use argon2::Params;
@@ -233,57 +233,94 @@ impl SecretService {
     pub fn lock(&self) {
         let mut state = sync::lock(&self.state, "secret state");
         if state.vault.take().is_some() {
-            log::info!("portal: secret vault explicitly locked; master key zeroized in memory");
+            log::info!("portal: secret vault locked; master key zeroized in memory");
         }
     }
 
-    /// Start a background worker that locks the vault if no secret access has
-    /// occurred within `idle_timeout`.
-    pub fn start_auto_lock_watcher(&self, idle_timeout: Duration) {
-        let state = Arc::clone(&self.state);
-        let spawned = std::thread::Builder::new()
-            .name("aegis-secret-auto-lock".to_owned())
-            .spawn(move || {
-                loop {
-                    std::thread::sleep(Duration::from_secs(30));
-                    let mut state = sync::lock(&state, "secret state");
-                    if state.is_unlocked()
-                        && state.last_accessed.elapsed() >= idle_timeout
-                        && state.vault.take().is_some()
-                    {
-                        log::info!(
-                            "portal: secret vault auto-locked after {idle_timeout:?} of inactivity"
-                        );
-                    }
-                }
-            });
-        if let Err(error) = spawned {
-            log::error!("portal: could not start auto-lock watcher: {error}");
+    /// Lock the vault because the session was locked (logind `Lock`
+    /// signal, `PrepareForSleep(true)`, or an idle-policy watchdog): drop
+    /// the master key from memory. Also drains any queued unlock
+    /// requests — a caller that queued behind an unlock prompt before the
+    /// screen locked must not have its fd answered from a vault the user
+    /// never re-authorized after the lock.
+    pub fn lock_for_session(&self) {
+        let requests = {
+            let mut state = sync::lock(&self.state, "secret state");
+            let requests = std::mem::take(&mut state.pending_unlocks);
+            if state.vault.take().is_some() {
+                log::info!(
+                    "portal: secret vault locked with the session; master key zeroized in memory"
+                );
+            }
+            requests
+        };
+        // Dismiss without the prompt: the lock is authoritative.
+        for request in requests {
+            let _ = request
+                .outcome
+                .send_blocking(PortalUnlockOutcome::Dismissed);
         }
     }
 
-    /// Watch for a PAM token that arrives after backend startup (for example
-    /// on screen unlock). The watcher exits permanently once the vault is
-    /// unlocked and never exposes the token to D-Bus.
+    /// The session returned (logind `Unlock` signal or
+    /// `PrepareForSleep(false)`). For a keyfile-mode vault the vault is
+    /// re-unlocked from `vault.key` — the user proved session ownership
+    /// to the screen locker, and a keyfile vault has no second factor to
+    /// demand (the unlock prompt would ask for a password this vault
+    /// never had). A password-mode vault stays locked until a PAM token
+    /// or the masked prompt unlocks it, so nothing is done here.
+    pub fn unlock_for_session(&self) {
+        {
+            let state = sync::lock(&self.state, "secret state");
+            if !state.is_keyfile_mode() || state.is_unlocked() {
+                return;
+            }
+        }
+        let mut state = sync::lock(&self.state, "secret state");
+        match state.unlock_with_keyfile() {
+            Ok(()) => log::info!("portal: secret vault re-unlocked from keyfile with the session"),
+            Err(error) => {
+                log::warn!("portal: keyfile re-unlock after session unlock failed: {error}")
+            }
+        }
+    }
+
+    /// Whether the vault is in keyfile mode (unlockable without a
+    /// credential). Exposed for the session-lock watcher to log the
+    /// effective policy once at startup.
+    pub fn is_keyfile_mode(&self) -> bool {
+        sync::lock(&self.state, "secret state").is_keyfile_mode()
+    }
+
+    /// Watch for a PAM token planted by a committing PAM hook (login, or
+    /// a screen locker that establishes credentials — see ADR-0010).
+    /// The watcher runs for the daemon's lifetime so a token planted
+    /// after any lock — startup, session lock, dismissed prompt — is
+    /// consumed; a consumed token that fails to unlock is logged and the
+    /// watcher keeps waiting for the next one. The token never crosses
+    /// D-Bus.
     pub fn start_pam_watcher(&self) {
-        if sync::lock(&self.state, "secret state").is_unlocked() {
-            return;
-        }
         let state = Arc::clone(&self.state);
         let spawned = std::thread::Builder::new()
             .name("aegis-pam-token-watcher".to_owned())
             .spawn(move || {
                 loop {
-                    if sync::lock(&state, "secret state").is_unlocked() {
-                        return;
-                    }
                     if let Some(token) = consume_pam_token() {
-                        match sync::lock(&state, "secret state").unlock_with_pam_token(&token) {
+                        let mut guard = sync::lock(&state, "secret state");
+                        match guard.unlock_with_pam_token(&token) {
                             Ok(()) => {
-                                log::info!("portal: secret vault unlocked by a new PAM token");
-                                return;
+                                log::info!("portal: secret vault unlocked by a PAM token");
                             }
-                            Err(error) => log::warn!("portal: PAM-token unlock failed: {error}"),
+                            Err(error) => {
+                                log::warn!("portal: PAM-token unlock failed: {error}");
+                                continue;
+                            }
+                        }
+                        // Wake anything queued behind the unlock prompt.
+                        let requests = std::mem::take(&mut guard.pending_unlocks);
+                        drop(guard);
+                        if !requests.is_empty() {
+                            complete_unlock_requests(&state, requests, true);
                         }
                     }
                     std::thread::sleep(Duration::from_millis(500));
@@ -317,17 +354,59 @@ pub enum SecretError {
 
 struct SecretState {
     pub(crate) vault: Option<Vault>,
-    pub(crate) last_accessed: Instant,
     pub(crate) pending_unlocks: Vec<PendingUnlock>,
     pub(crate) unlock_worker_active: bool,
     pub(crate) vault_path: PathBuf,
     pub(crate) salt_path: PathBuf,
     pub(crate) kdf_path: PathBuf,
+    /// Present when the vault directory holds a `vault.key` (keyfile
+    /// mode). A keyfile vault is always unlockable without a prompt, so a
+    /// lock is reversible: the master key is re-read from disk on the
+    /// next unlock path instead of demanding a password the vault never
+    /// had. `None` marks password mode, whose only re-unlock paths are
+    /// the PAM token and the masked prompt.
+    pub(crate) keyfile_path: Option<PathBuf>,
 }
 
 impl SecretState {
     pub(crate) fn is_unlocked(&self) -> bool {
         self.vault.is_some()
+    }
+
+    /// Is this a keyfile-mode vault, unlockable without a credential?
+    pub(crate) fn is_keyfile_mode(&self) -> bool {
+        self.keyfile_path.is_some()
+    }
+
+    /// Re-unlock a keyfile-mode vault by re-reading `vault.key` from disk
+    /// and proving it through authenticated decryption. The read carries
+    /// the same `O_NOFOLLOW`, ownership, mode-0600, and size validation as
+    /// startup ([`read_regular_file`]), so a swapped or tampered keyfile
+    /// fails closed exactly like a corrupted startup state. This is the
+    /// only post-startup keyfile path: the vault file itself is never
+    /// created here (startup owns first-run initialization).
+    pub(crate) fn unlock_with_keyfile(&mut self) -> Result<(), SecretError> {
+        let Some(key_path) = self.keyfile_path.clone() else {
+            return Err(SecretError::Vault(
+                "vault is not in keyfile mode".to_owned(),
+            ));
+        };
+        if !self.vault_path.exists() {
+            return Err(SecretError::Vault(
+                "keyfile-mode vault is missing vault.enc".to_owned(),
+            ));
+        }
+        let hex = read_regular_file(&key_path, MAX_KEYFILE_BYTES, true)?;
+        let hex = std::str::from_utf8(&hex)
+            .map_err(|_| SecretError::Crypto("vault.key is not UTF-8".to_owned()))?;
+        let mut key = Vault::key_from_hex(hex)?;
+        let vault = Vault::new(self.vault_path.clone(), key);
+        key.zeroize();
+        // Authenticated decryption is the validity check: a stale or
+        // tampered keyfile fails closed without touching state.
+        let _validated = vault.load()?;
+        self.vault = Some(vault);
+        Ok(())
     }
 
     /// The KDF candidates present on disk, in unlock-attempt order.
@@ -714,12 +793,13 @@ fn create_password_vault_in(
 
     Ok(Arc::new(Mutex::new(SecretState {
         vault: Some(vault),
-        last_accessed: Instant::now(),
         pending_unlocks: Vec::new(),
         unlock_worker_active: false,
         vault_path,
         salt_path,
         kdf_path,
+        // A password-mode vault is never keyfile-unlockable.
+        keyfile_path: None,
     })))
 }
 
@@ -741,12 +821,12 @@ pub fn rekey_password_vault_in(dir: &Path, current: &str, new: &str) -> Result<(
     validate_private_dir(dir)?;
     let mut state = SecretState {
         vault: None,
-        last_accessed: Instant::now(),
         pending_unlocks: Vec::new(),
         unlock_worker_active: false,
         vault_path: dir.join("vault.enc"),
         salt_path: dir.join("vault.salt"),
         kdf_path: dir.join("vault.kdf"),
+        keyfile_path: None,
     };
     state.change_password(current, new)
 }
@@ -895,14 +975,42 @@ fn unlock_worker(state: Arc<Mutex<SecretState>>, prompter: Arc<dyn SecretPrompte
         let unlocked = if sync::lock(&state, "secret state").is_unlocked() {
             true
         } else {
-            match prompt_and_unlock(&state, prompter.as_ref(), &requests) {
-                Ok(()) => {
-                    log::info!("portal: secret vault unlocked via password prompt");
-                    true
-                }
-                Err(reason) => {
-                    log::warn!("portal: vault unlock did not complete: {reason}");
+            // A keyfile-mode vault has no password: its prompt can never
+            // succeed. Re-read the keyfile instead of demanding a
+            // credential the vault never had.
+            let keyfile_unlock = {
+                let mut state = sync::lock(&state, "secret state");
+                if state.is_keyfile_mode() {
+                    match state.unlock_with_keyfile() {
+                        Ok(()) => {
+                            log::info!(
+                                "portal: secret vault re-unlocked from keyfile for a waiting request"
+                            );
+                            true
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "portal: keyfile re-unlock failed: {error}; falling back to the prompt"
+                            );
+                            false
+                        }
+                    }
+                } else {
                     false
+                }
+            };
+            if keyfile_unlock {
+                true
+            } else {
+                match prompt_and_unlock(&state, prompter.as_ref(), &requests) {
+                    Ok(()) => {
+                        log::info!("portal: secret vault unlocked via password prompt");
+                        true
+                    }
+                    Err(reason) => {
+                        log::warn!("portal: vault unlock did not complete: {reason}");
+                        false
+                    }
                 }
             }
         };
@@ -1064,14 +1172,15 @@ fn init_in(dir: &Path) -> Result<Arc<Mutex<SecretState>>, SecretError> {
     prepare_private_dir(dir)?;
 
     let key_path = dir.join("vault.key");
+    let keyfile_present = key_path.exists();
     let mut state = SecretState {
         vault: None,
-        last_accessed: Instant::now(),
         pending_unlocks: Vec::new(),
         unlock_worker_active: false,
         vault_path: dir.join("vault.enc"),
         salt_path: dir.join("vault.salt"),
         kdf_path: dir.join("vault.kdf"),
+        keyfile_path: keyfile_present.then_some(key_path.clone()),
     };
 
     if key_path.exists() {
@@ -1131,6 +1240,7 @@ fn init_in(dir: &Path) -> Result<Arc<Mutex<SecretState>>, SecretError> {
                     collections: vec![],
                 })?;
                 state.vault = Some(vault);
+                state.keyfile_path = Some(key_path.clone());
                 log::info!("portal: secret vault initialized at {}", dir.display());
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -1151,6 +1261,7 @@ fn init_in(dir: &Path) -> Result<Arc<Mutex<SecretState>>, SecretError> {
                     let _validated = vault.load()?;
                 }
                 state.vault = Some(vault);
+                state.keyfile_path = Some(key_path);
             }
             Err(error) => return Err(SecretError::Io(error)),
         }
@@ -1267,12 +1378,12 @@ mod tests {
         prepare_private_dir(dir).expect("prepare vault dir");
         Arc::new(Mutex::new(SecretState {
             vault: None,
-            last_accessed: Instant::now(),
             pending_unlocks: Vec::new(),
             unlock_worker_active: false,
             vault_path: dir.join("vault.enc"),
             salt_path: dir.join("vault.salt"),
             kdf_path: dir.join("vault.kdf"),
+            keyfile_path: None,
         }))
     }
 
@@ -2338,6 +2449,111 @@ mod tests {
         assert!(!service.is_unlocked());
         // Idempotent
         service.lock();
+        assert!(!service.is_unlocked());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_lock_then_unlock_round_trips_a_keyfile_vault() {
+        struct DummyPrompter;
+        impl SecretPrompter for DummyPrompter {
+            fn prompt_secret(
+                &self,
+                _title: &str,
+                _reason: Option<&str>,
+                _cancelled: &dyn Fn() -> bool,
+            ) -> Result<PromptResponse, String> {
+                Ok(PromptResponse::Cancelled)
+            }
+        }
+
+        let dir = temp_dir("session-roundtrip");
+        let service = SecretService {
+            state: init_in(&dir).expect("init"),
+            prompter: Arc::new(DummyPrompter),
+        };
+        assert!(service.is_keyfile_mode());
+        assert!(service.is_unlocked());
+
+        // The desktop locked the session: the master key leaves memory.
+        service.lock_for_session();
+        assert!(!service.is_unlocked());
+
+        // The session returned: a keyfile vault re-unlocks without a
+        // credential — it never had one to prompt for.
+        service.unlock_for_session();
+        assert!(service.is_unlocked());
+
+        // Idempotent in both directions; a second unlock is a no-op on an
+        // already-unlocked vault, and the keyfile path survives repeated
+        // cycles (each re-read revalidates mode, ownership, and the
+        // authenticated decryption).
+        for _ in 0..2 {
+            service.lock_for_session();
+            service.unlock_for_session();
+        }
+        assert!(service.is_unlocked());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_unlock_leaves_a_password_vault_locked() {
+        struct DummyPrompter;
+        impl SecretPrompter for DummyPrompter {
+            fn prompt_secret(
+                &self,
+                _title: &str,
+                _reason: Option<&str>,
+                _cancelled: &dyn Fn() -> bool,
+            ) -> Result<PromptResponse, String> {
+                Ok(PromptResponse::Cancelled)
+            }
+        }
+
+        let dir = temp_dir("password-session-unlock");
+        write_legacy_password_vault(&dir, "hunter2", "c29tZXNhbHQ");
+        let service = SecretService {
+            state: locked_password_state(&dir),
+            prompter: Arc::new(DummyPrompter),
+        };
+        assert!(!service.is_keyfile_mode());
+        assert!(!service.is_unlocked());
+
+        // The session returning never grants a password vault: its only
+        // re-unlock paths are the PAM token and the masked prompt.
+        service.unlock_for_session();
+        assert!(!service.is_unlocked());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keyfile_reunlock_fails_closed_on_a_swapped_key() {
+        struct DummyPrompter;
+        impl SecretPrompter for DummyPrompter {
+            fn prompt_secret(
+                &self,
+                _title: &str,
+                _reason: Option<&str>,
+                _cancelled: &dyn Fn() -> bool,
+            ) -> Result<PromptResponse, String> {
+                Ok(PromptResponse::Cancelled)
+            }
+        }
+
+        let dir = temp_dir("swapped-key");
+        let service = SecretService {
+            state: init_in(&dir).expect("init"),
+            prompter: Arc::new(DummyPrompter),
+        };
+        service.lock_for_session();
+        assert!(!service.is_unlocked());
+
+        // Swap in a syntactically valid key that does not decrypt the
+        // vault: the re-unlock must fail closed and stay locked.
+        let other = Vault::generate_key();
+        let encoded = Zeroizing::new(Vault::key_to_hex(&other));
+        std::fs::write(dir.join("vault.key"), encoded.as_bytes()).unwrap();
+        service.unlock_for_session();
         assert!(!service.is_unlocked());
         let _ = std::fs::remove_dir_all(&dir);
     }

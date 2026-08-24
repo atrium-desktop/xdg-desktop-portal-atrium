@@ -7,7 +7,7 @@
 | `org.freedesktop.impl.portal.Settings` | Version 1 | Compositor-owned appearance and input settings |
 | `org.freedesktop.impl.portal.Screenshot` | Version 3 | Area target, color picking, and consent-checked legacy output capture |
 | `org.freedesktop.impl.portal.ScreenCast` | Version 6 | Monitor and (protocol 29) window sources through a source chooser plus compositor consent; per-output selection on multi-output compositors; Hidden and (protocol 29) Embedded cursor modes; `persist_mode` 1–2 restore tokens for monitor selections ([ADR-0016](../adr/0016-screencast-runtime-protocol-29.md)); stable `pipewire-serial`, 60 fps ceiling, zero-copy dmabuf delivery over the protocol-25 [slot protocol](../adr/0005-screencast-dmabuf-slot-protocol.md) with a shared-memory fallback; output geometry changes renegotiate the live stream; per-frame damage rides `SPA_META_VideoDamage` when the consumer requests it |
-| `org.freedesktop.impl.portal.Secret` | Version 1 | Stable per-application secret from the encrypted vault; Portal-owned masked unlock prompt |
+| `org.freedesktop.impl.portal.Secret` | Version 1 | Stable per-application secret from the encrypted vault; Portal-owned masked unlock prompt; the vault locks/unlocks with the logind session-lock boundary (ADR-0019) |
 | `org.freedesktop.impl.portal.Lockdown` | Current seven-property ABI | All properties are read-write and process-resident |
 | `org.freedesktop.impl.portal.FileChooser` | Current backend ABI | Open, save, directory, and multiple-file flows through a one-shot optics (iris/lens) process |
 | `org.freedesktop.impl.portal.Email` | Current backend ABI | `xdg-email` handoff, attachment URI validation, activation token forwarding |

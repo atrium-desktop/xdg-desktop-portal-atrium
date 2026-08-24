@@ -64,6 +64,7 @@ mod screencast;
 mod screenshot;
 mod session;
 mod settings;
+mod vault_watch;
 mod wallpaper;
 
 use std::sync::{Arc, Mutex, mpsc};
@@ -229,9 +230,9 @@ pub fn run() -> Result<(), PortalError> {
     // Secret is declared in aegis.portal, so its storage is part of the
     // service's startup contract. Never acquire the bus name with that
     // advertised interface missing.
-    let secret_service = SecretService::initialize(Arc::new(PortalSecretPrompter {
+    let secret_service = Arc::new(SecretService::initialize(Arc::new(PortalSecretPrompter {
         settings: settings_store.clone(),
-    }))?;
+    }))?);
 
     // Serve before requesting the name so no call can arrive at a name we own
     // but do not serve yet (same ordering as the SNI tray watcher).
@@ -355,7 +356,12 @@ pub fn run() -> Result<(), PortalError> {
 
     secret_service.register_portal(&conn, Arc::clone(&tracker), DESKTOP_PATH)?;
     secret_service.start_pam_watcher();
-    secret_service.start_auto_lock_watcher(std::time::Duration::from_secs(15 * 60));
+    // The vault's lock state follows the desktop's authoritative lock
+    // boundary (logind session Lock/Unlock and suspend) — ADR-0019. The
+    // 15-minute idle auto-lock is gone: an idle timer measured "no app
+    // read a secret", not "the user left", and locked users out of
+    // keyfile vaults that have no password to prompt for.
+    vault_watch::spawn_session_lock_watcher(Arc::clone(&secret_service));
 
     let worker_tracker = Arc::clone(&tracker);
     let worker_socket = socket.clone();
