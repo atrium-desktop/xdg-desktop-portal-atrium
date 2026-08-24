@@ -3,17 +3,17 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.23"
+version = "0.0.24"
 edition = "2024"
 license = "MIT"
 rust-version = "1.88"
 repository = "https://github.com/aegis-shell/xdg-desktop-portal-aegis"
 
 [workspace.dependencies]
-aegis-portal-ipc = { version = "=0.0.23", path = "crates/aegis-portal-ipc" }
-aegis-portal-runtime = { version = "=0.0.23", path = "crates/aegis-portal-runtime" }
-aegis-portal-prompter = { version = "=0.0.23", path = "crates/aegis-portal-prompter" }
-aegis-portal-secret = { version = "=0.0.23", path = "crates/aegis-portal-secret" }
+aegis-portal-ipc = { version = "=0.0.24", path = "crates/aegis-portal-ipc" }
+aegis-portal-runtime = { version = "=0.0.24", path = "crates/aegis-portal-runtime" }
+aegis-portal-prompter = { version = "=0.0.24", path = "crates/aegis-portal-prompter" }
+aegis-portal-secret = { version = "=0.0.24", path = "crates/aegis-portal-secret" }
 
 dirs = "5"
 env_logger = "0.11"

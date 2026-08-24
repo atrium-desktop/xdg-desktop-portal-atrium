@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.24] - 2026-08-24
+
+### Changed
+
+- **The secret vault master key is now retained across session locks and suspend.** Master keys are bound to the user login session and protected with `mlock` and `MADV_DONTDUMP` in memory, preventing credential wipes and cookie database resets in sandboxed applications (e.g. Chromium / Flatpak Chrome) during screen locks.
+- **PAM token watching is now event-driven via Linux inotify.** Replaced the 500ms polling loop with inotify watching `/run/user/<uid>`, eliminating latency and race conditions when sandboxed applications launch immediately upon startup.
+- **Simplified vault commitment structures.** Removed dead legacy item structures in `aegis-portal-secret`, keeping the Poly1305 commitment validation pure while retaining 100% backward compatibility with on-disk collections.
+
 ## [0.0.23] - 2026-08-24
 
 ### Changed
@@ -661,7 +669,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.23...HEAD
+[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.24...HEAD
+[0.0.24]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.24
 [0.0.23]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.23
 [0.0.22]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.22
 [0.0.21]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.21
