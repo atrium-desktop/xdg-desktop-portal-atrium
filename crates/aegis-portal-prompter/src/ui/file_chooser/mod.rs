@@ -1687,7 +1687,6 @@ fn place_icon(f: &mut Frame, icon: PlaceIcon) {
         PlaceIcon::Pictures => id::LENS_ICON_IMAGE,
         PlaceIcon::Videos => id::LENS_ICON_FILM,
         PlaceIcon::Bookmark => id::LENS_ICON_BOOKMARK,
-        PlaceIcon::Folder => id::LENS_ICON_FOLDER,
     };
     raw_icon(f, icon, metrics::ICON_SMALL);
 }

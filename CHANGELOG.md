@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.25] - 2026-08-25
+
+### Changed
+
+- Promoted Optics dependencies from `v0.0.27` to `v0.0.28`: the layered
+  backdrop material compositor and table scroll row hit-test repair in lens.
+
 ### Added
 
 - **GTK bookmarks and sidebar places in the file chooser.** The file chooser now loads and parses bookmarks from `$XDG_CONFIG_HOME/gtk-3.0/bookmarks`, categorizes sidebar places into standard and pinned sections, and renders compact sidebar rows.
@@ -673,7 +680,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.24...HEAD
+[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.25...HEAD
+[0.0.25]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.25
 [0.0.24]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.24
 [0.0.23]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.23
 [0.0.22]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.22

@@ -3,17 +3,17 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.24"
+version = "0.0.25"
 edition = "2024"
 license = "MIT"
 rust-version = "1.88"
 repository = "https://github.com/aegis-shell/xdg-desktop-portal-aegis"
 
 [workspace.dependencies]
-aegis-portal-ipc = { version = "=0.0.24", path = "crates/aegis-portal-ipc" }
-aegis-portal-runtime = { version = "=0.0.24", path = "crates/aegis-portal-runtime" }
-aegis-portal-prompter = { version = "=0.0.24", path = "crates/aegis-portal-prompter" }
-aegis-portal-secret = { version = "=0.0.24", path = "crates/aegis-portal-secret" }
+aegis-portal-ipc = { version = "=0.0.25", path = "crates/aegis-portal-ipc" }
+aegis-portal-runtime = { version = "=0.0.25", path = "crates/aegis-portal-runtime" }
+aegis-portal-prompter = { version = "=0.0.25", path = "crates/aegis-portal-prompter" }
+aegis-portal-secret = { version = "=0.0.25", path = "crates/aegis-portal-secret" }
 
 dirs = "5"
 env_logger = "0.11"
@@ -40,14 +40,14 @@ sha2 = "0.10"
 # monorepo release. Joint development against a sibling optics checkout uses
 # .cargo/optics-local.toml without making the sibling checkout mandatory for
 # CI (mirror of the Aegis workflow).
-iris = { git = "https://github.com/ming2k/optics", tag = "v0.0.27" }
-lens = { git = "https://github.com/ming2k/optics", tag = "v0.0.27" }
+iris = { git = "https://github.com/ming2k/optics", tag = "v0.0.28" }
+lens = { git = "https://github.com/ming2k/optics", tag = "v0.0.28" }
 # Direct -sys dependencies are how the terminal binary sees the
 # DEP_*_RPATHS metadata (published via the -sys crates' `links`) and can
 # re-emit the loader paths itself; see aegis-portal-prompter/build.rs.
-flux-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.27" }
-iris-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.27" }
-lens-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.27" }
+flux-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.28" }
+iris-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.28" }
+lens-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.28" }
 libc = "0.2"
 log = "0.4"
 mime_guess = "2"

@@ -160,7 +160,6 @@ pub enum PlaceIcon {
     Videos,
     Computer,
     Bookmark,
-    Folder,
 }
 
 /// The sidebar section a place belongs to.
