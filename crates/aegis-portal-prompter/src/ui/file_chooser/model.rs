@@ -159,14 +159,25 @@ pub enum PlaceIcon {
     Pictures,
     Videos,
     Computer,
+    Bookmark,
+    Folder,
 }
 
-/// One sidebar shortcut to a well-known folder.
+/// The sidebar section a place belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaceSection {
+    Standard,
+    Pinned,
+}
+
+/// One sidebar shortcut to a well-known folder or pinned bookmark.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
     pub name: String,
     pub path: PathBuf,
     pub icon: PlaceIcon,
+    pub section: PlaceSection,
+    pub custom: bool,
 }
 
 /// The XDG user dirs offered in the sidebar, in display order.
@@ -180,8 +191,7 @@ const USER_DIR_KEYS: &[(&str, &str, PlaceIcon)] = &[
 ];
 
 /// The sidebar shortcuts: Home, the configured XDG user dirs that exist on
-/// disk, and the filesystem root. Without a readable `user-dirs.dirs` the
-/// canonical `~/Desktop`-style names are tried instead.
+/// disk, the filesystem root, and user bookmarks from `~/.config/gtk-3.0/bookmarks`.
 pub fn places() -> Vec<Place> {
     let mut result = Vec::new();
     if let Some(home) = std::env::home_dir() {
@@ -189,6 +199,8 @@ pub fn places() -> Vec<Place> {
             name: "Home".to_owned(),
             path: home.clone(),
             icon: PlaceIcon::Home,
+            section: PlaceSection::Standard,
+            custom: false,
         });
         let config = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
@@ -203,6 +215,8 @@ pub fn places() -> Vec<Place> {
                     name: (*name).to_owned(),
                     path: home.join(name),
                     icon: *icon,
+                    section: PlaceSection::Standard,
+                    custom: false,
                 })
                 .collect();
         }
@@ -216,7 +230,17 @@ pub fn places() -> Vec<Place> {
         name: "Computer".to_owned(),
         path: PathBuf::from("/"),
         icon: PlaceIcon::Computer,
+        section: PlaceSection::Standard,
+        custom: false,
     });
+
+    let bookmarks = load_bookmarks(None);
+    for b in bookmarks {
+        if !result.iter().any(|seen| seen.path == b.path) {
+            result.push(b);
+        }
+    }
+
     result
 }
 
@@ -257,9 +281,127 @@ fn parse_user_dirs(content: &str, home: &Path) -> Vec<Place> {
                 name: label,
                 path,
                 icon: *icon,
+                section: PlaceSection::Standard,
+                custom: false,
             })
         })
         .collect()
+}
+
+/// Load user bookmarks from `$XDG_CONFIG_HOME/gtk-3.0/bookmarks` (or `~/.config/gtk-3.0/bookmarks`).
+pub fn load_bookmarks(home: Option<&Path>) -> Vec<Place> {
+    let home_buf = std::env::home_dir();
+    let Some(home) = home.or(home_buf.as_deref()) else {
+        return Vec::new();
+    };
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".config"));
+    let bookmarks_file = config.join("gtk-3.0/bookmarks");
+    let Ok(content) = std::fs::read_to_string(&bookmarks_file) else {
+        return Vec::new();
+    };
+    parse_bookmarks(&content)
+}
+
+/// Parse the contents of a GTK bookmarks file.
+/// Format: `file:///absolute/path/to/dir [optional custom label]`
+pub fn parse_bookmarks(content: &str) -> Vec<Place> {
+    let mut places = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (uri_part, label_part) = match line.split_once(' ') {
+            Some((uri, label)) => (uri.trim(), Some(label.trim())),
+            None => (line, None),
+        };
+        let Some(path_str) = uri_part.strip_prefix("file://") else {
+            continue;
+        };
+        let decoded = url_decode(path_str);
+        let path = PathBuf::from(decoded);
+        if !path.is_dir() {
+            continue;
+        }
+        let name = label_part
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_owned())
+            .or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| path.display().to_string());
+
+        places.push(Place {
+            name,
+            path,
+            icon: PlaceIcon::Bookmark,
+            section: PlaceSection::Pinned,
+            custom: true,
+        });
+    }
+    places
+}
+
+/// Save user bookmarks to `$XDG_CONFIG_HOME/gtk-3.0/bookmarks`.
+pub fn save_bookmarks(home: Option<&Path>, places: &[Place]) -> std::io::Result<()> {
+    let home_buf = std::env::home_dir();
+    let Some(home) = home.or(home_buf.as_deref()) else {
+        return Ok(());
+    };
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".config"));
+    let dir = config.join("gtk-3.0");
+    std::fs::create_dir_all(&dir)?;
+    let bookmarks_file = dir.join("bookmarks");
+    let mut out = String::new();
+    for place in places.iter().filter(|p| p.custom) {
+        let encoded_path = url_encode(&place.path.to_string_lossy());
+        let default_name = place.path.file_name().map(|n| n.to_string_lossy());
+        if let Some(def) = default_name && place.name != def {
+            out.push_str(&format!("file://{encoded_path} {}\n", place.name));
+        } else {
+            out.push_str(&format!("file://{encoded_path}\n"));
+        }
+    }
+    std::fs::write(&bookmarks_file, out)
+}
+
+fn url_decode(s: &str) -> String {
+    let mut bytes = Vec::with_capacity(s.len());
+    let mut chars = s.bytes();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            let h1 = chars.next();
+            let h2 = chars.next();
+            if let (Some(h1), Some(h2)) = (h1, h2) {
+                if let Ok(val) = u8::from_str_radix(std::str::from_utf8(&[h1, h2]).unwrap_or(""), 16) {
+                    bytes.push(val);
+                    continue;
+                }
+            }
+        }
+        bytes.push(b);
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'/' => {
+                out.push(b as char);
+            }
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(out, "%{:02X}", b);
+            }
+        }
+    }
+    out
 }
 
 /// Expand a leading `~` or `~/` to `home`; anything else passes through
@@ -481,6 +623,8 @@ XDG_UNKNOWN_DIR=\"$HOME/ignored\"
                 name: "docs".to_owned(),
                 path: PathBuf::from("/home/ming/docs"),
                 icon: PlaceIcon::Documents,
+                section: PlaceSection::Standard,
+                custom: false,
             }]
         );
     }
@@ -607,6 +751,38 @@ XDG_UNKNOWN_DIR=\"$HOME/ignored\"
         let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
         // Directories stay visible for navigation; files are filtered.
         assert_eq!(names, ["alpha", "zeta", "beta.txt"]);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bookmarks_parse_and_roundtrip() {
+        let root = std::env::temp_dir().join(format!("aegis-bookmarks-{}", std::process::id()));
+        let dir1 = root.join("Projects");
+        let dir2 = root.join("Notes");
+        std::fs::create_dir_all(&dir1).unwrap();
+        std::fs::create_dir_all(&dir2).unwrap();
+
+        let raw = format!(
+            "file://{} My Projects\nfile://{}\n",
+            dir1.to_str().unwrap(),
+            dir2.to_str().unwrap()
+        );
+        let parsed = parse_bookmarks(&raw);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].name, "My Projects");
+        assert_eq!(parsed[0].path, dir1);
+        assert_eq!(parsed[0].section, PlaceSection::Pinned);
+        assert!(parsed[0].custom);
+        assert_eq!(parsed[1].name, "Notes");
+        assert_eq!(parsed[1].path, dir2);
+
+        let home = root.clone();
+        save_bookmarks(Some(&home), &parsed).unwrap();
+        let loaded = load_bookmarks(Some(&home));
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].name, "My Projects");
+        assert_eq!(loaded[1].name, "Notes");
 
         std::fs::remove_dir_all(root).unwrap();
     }

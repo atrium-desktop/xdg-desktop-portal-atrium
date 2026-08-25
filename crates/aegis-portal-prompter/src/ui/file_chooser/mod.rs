@@ -33,8 +33,8 @@ use lens::{
     Align, Color, Frame, Input, LayoutOpts, ModalOpts, TableColumn, TableOpts, TextBuf, key, mods,
 };
 use model::{
-    Entry, History, Place, PlaceIcon, breadcrumbs, common_prefix, expand_tilde, list_dir,
-    normalize_lexical, split_dir_tail, typeahead_index, valid_filename,
+    Entry, History, Place, PlaceIcon, PlaceSection, breadcrumbs, common_prefix, expand_tilde,
+    list_dir, normalize_lexical, split_dir_tail, typeahead_index, valid_filename,
 };
 use preview::{PreviewPanel, PreviewState};
 
@@ -82,6 +82,14 @@ struct State {
     last_click: Option<(PathBuf, Instant)>,
     /// The sidebar shortcuts to well-known folders, resolved once at start.
     places: Vec<Place>,
+    /// The right-clicked sidebar place target for context menu.
+    context_place: Option<Place>,
+    /// Currently dragged directory path.
+    drag_source: Option<PathBuf>,
+    /// Mouse coordinates when dragging began.
+    drag_start: (f32, f32),
+    /// Whether mouse movement has passed the drag threshold.
+    drag_active: bool,
     /// The type-a-path field content (while `location_editing`), a lens
     /// text field like `name`.
     location: TextBuf,
@@ -260,6 +268,10 @@ impl State {
             show_hidden: false,
             last_click: None,
             places: model::places(),
+            context_place: None,
+            drag_source: None,
+            drag_start: (0.0, 0.0),
+            drag_active: false,
             location: TextBuf::new(1024, ""),
             location_caret_end: false,
             location_editing: false,
@@ -283,6 +295,35 @@ impl State {
             reload: true,
             done: None,
         }
+    }
+
+    /// Pin a folder into user bookmarks (~/.config/gtk-3.0/bookmarks).
+    fn pin_path(&mut self, path: PathBuf, custom_name: Option<String>) {
+        if !path.is_dir() {
+            return;
+        }
+        if self.places.iter().any(|p| p.path == path) {
+            return;
+        }
+        let name = custom_name.unwrap_or_else(|| {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string())
+        });
+        self.places.push(Place {
+            name,
+            path,
+            icon: PlaceIcon::Bookmark,
+            section: PlaceSection::Pinned,
+            custom: true,
+        });
+        let _ = model::save_bookmarks(None, &self.places);
+    }
+
+    /// Unpin a folder from user bookmarks.
+    fn unpin_path(&mut self, path: &Path) {
+        self.places.retain(|p| !(p.custom && p.path == path));
+        let _ = model::save_bookmarks(None, &self.places);
     }
 
     /// The filter currently narrowing the file list, if any.
@@ -717,10 +758,12 @@ fn icon_tool_button(
     enabled && response.clicked
 }
 
-/// Whether a transient dropdown popup is open (it swallows Escape).
+/// Whether a transient dropdown popup or context menu is open (it swallows Escape).
 fn popup_open(state: &State, f: &mut Frame) -> bool {
     let filter_open = f.place_is_open(&format!("{FILTER_DROPDOWN}##ov"));
+    let place_ctx_open = f.place_is_open("place-context") || f.place_is_open("place-context##ov");
     filter_open
+        || place_ctx_open
         || state
             .request
             .choices
@@ -823,6 +866,31 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
     f.set_theme(style::theme_for(&state.appearance));
     let palette = state.appearance.palette();
     state.ctrl_held = command_held(input);
+
+    let cursor_pos = (input.as_raw().cursor.x, input.as_raw().cursor.y);
+    let mouse_left_down = input.as_raw().mouse_down[0];
+    let mouse_left_released = input.as_raw().mouse_released[0];
+
+    if mouse_left_down {
+        if let Some(_) = &state.drag_source {
+            let dx = cursor_pos.0 - state.drag_start.0;
+            let dy = cursor_pos.1 - state.drag_start.1;
+            if dx * dx + dy * dy > 16.0 {
+                state.drag_active = true;
+            }
+        }
+    } else if mouse_left_released || !mouse_left_down {
+        if state.drag_active {
+            if cursor_pos.0 >= 0.0 && cursor_pos.0 <= metrics::SIDEBAR_WIDTH + metrics::SPACE_M * 2.0 {
+                if let Some(source) = state.drag_source.take() {
+                    state.pin_path(source, None);
+                }
+            }
+        }
+        state.drag_source = None;
+        state.drag_active = false;
+    }
+
     if state.reload {
         state.reload_entries();
     }
@@ -898,6 +966,16 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                         state.folder_focus = true;
                         state.folder_error = None;
                         state.folder_name.set("");
+                    }
+                    let is_current_pinned = state.places.iter().any(|p| p.path == state.dir);
+                    if icon_tool_button(
+                        f,
+                        "pin-folder",
+                        &palette,
+                        !is_current_pinned,
+                        |f| raw_icon(f, lens::sys::lens_icon_id::LENS_ICON_BOOKMARK, metrics::ICON),
+                    ) {
+                        state.pin_path(state.dir.clone(), None);
                     }
                     if state.location_editing {
                         f.flex(1.0);
@@ -1019,24 +1097,54 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                     ..Default::default()
                 },
                 |f| {
-                    // The places rail is a translucent material band
-                    // (Finder's sidebar read): a light wash plus hairline
-                    // over the opaque surface, so the browsing column
-                    // reads as the content plane beside it.
-                    let mut rail = style::band_layout_opts(state.appearance.dark());
-                    rail.width = metrics::SIDEBAR_WIDTH;
-                    f.column_ex(&rail, |f| {
+                    // The places rail: clean, flat, and compact, separated from the browsing column by a hairline.
+                    let sidebar_opts = LayoutOpts {
+                        width: metrics::SIDEBAR_WIDTH,
+                        ..Default::default()
+                    };
+                    f.column_ex(&sidebar_opts, |f| {
                         f.scroll("chooser-places", |f| {
+                            let content_w = metrics::SIDEBAR_WIDTH - 8.0;
                             f.column_ex(
                                 &LayoutOpts {
-                                    width: metrics::SIDEBAR_WIDTH,
-                                    gap: metrics::SPACE_XXS,
+                                    width: content_w,
+                                    gap: 1.0,
+                                    pad: metrics::SPACE_XXS,
                                     ..Default::default()
                                 },
                                 |f| {
-                                    for index in 0..state.places.len() {
-                                        let place = state.places[index].clone();
-                                        place_row(state, f, index, &place);
+                                    let standard_places: Vec<(usize, Place)> = state
+                                        .places
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, p)| p.section == PlaceSection::Standard)
+                                        .map(|(i, p)| (i, p.clone()))
+                                        .collect();
+
+                                    let pinned_places: Vec<(usize, Place)> = state
+                                        .places
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, p)| p.section == PlaceSection::Pinned)
+                                        .map(|(i, p)| (i, p.clone()))
+                                        .collect();
+
+                                    if !standard_places.is_empty() {
+                                        sidebar_section_header(f, "PLACES", &palette);
+                                        for (index, place) in &standard_places {
+                                            place_row(state, f, *index, place);
+                                        }
+                                    }
+
+                                    if !pinned_places.is_empty() || state.drag_active {
+                                        f.spacer(metrics::SPACE_XS);
+                                        sidebar_section_header(f, "PINNED", &palette);
+                                        for (index, place) in &pinned_places {
+                                            place_row(state, f, *index, place);
+                                        }
+                                        if state.drag_active {
+                                            drop_indicator(f, &palette);
+                                        }
                                     }
                                 },
                             );
@@ -1274,6 +1382,24 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
         );
     }
 
+    // ---- context menu for places ---------------------------------------
+    f.context_menu("place-context", |f| {
+        if let Some(target) = state.context_place.clone() {
+            if f.menu_item("Open", "") {
+                state.navigate(target.path.clone());
+            }
+            if f.menu_item("Copy Path", "") {
+                f.copy(&target.path.to_string_lossy());
+            }
+            if target.custom {
+                f.menu_separator();
+                if f.menu_item("Remove from Bookmarks", "") {
+                    state.unpin_path(&target.path);
+                }
+            }
+        }
+    });
+
     // Backspace walks up one folder when no text field owns the key.
     if key_pressed(input, key::BACKSPACE)
         && !state.location_editing
@@ -1481,26 +1607,68 @@ fn preview_caption(
     }
 }
 
+fn sidebar_section_header(f: &mut Frame, title: &str, palette: &style::Palette) {
+    f.push_style(style::small_muted_style_for(palette));
+    f.row_ex(
+        &LayoutOpts {
+            height: metrics::SIDEBAR_HEADER_HEIGHT,
+            cross: Align::Center,
+            pad: metrics::SPACE_XS,
+            ..Default::default()
+        },
+        |f| {
+            f.label_sized(title, metrics::FONT_SMALL);
+        },
+    );
+    f.pop_style();
+}
+
+fn drop_indicator(f: &mut Frame, palette: &style::Palette) {
+    let opts = LayoutOpts {
+        gap: metrics::SPACE_S,
+        pad: metrics::SPACE_XS,
+        min_height: metrics::SIDEBAR_ROW_HEIGHT,
+        cross: Align::Center,
+        bg: palette.hover,
+        radius: metrics::RADIUS_SM,
+        ..Default::default()
+    };
+    f.row_ex(&opts, |f| {
+        raw_icon(f, lens::sys::lens_icon_id::LENS_ICON_FOLDER_PLUS, metrics::ICON_SMALL);
+        f.push_style(style::small_muted_style_for(palette));
+        f.label_sized("Drop to Pin", metrics::FONT_SMALL);
+        f.pop_style();
+    });
+}
+
 /// One sidebar shortcut row, highlighted when it is the browsed folder.
 fn place_row(state: &mut State, f: &mut Frame, index: usize, place: &Place) {
     let active = state.dir == place.path;
     let opts = LayoutOpts {
         gap: metrics::SPACE_S,
         pad: metrics::SPACE_XS,
-        min_height: metrics::ROW_HEIGHT,
+        min_height: metrics::SIDEBAR_ROW_HEIGHT,
         cross: Align::Center,
         bg: if active {
             palette_active(state)
         } else {
             Color::TRANSPARENT
         },
-        radius: metrics::RADIUS,
+        radius: metrics::RADIUS_SM,
         ..Default::default()
     };
     let (response, ()) = f.pressable_row(&format!("place-{index}"), "", &opts, |f, _| {
         place_icon(f, place.icon);
         f.label(&place.name);
     });
+    if response.pressed && state.drag_source.is_none() {
+        state.drag_source = Some(place.path.clone());
+        state.drag_active = false;
+    }
+    if response.right_clicked {
+        f.context_menu_open("place-context", response.rect);
+        state.context_place = Some(place.clone());
+    }
     if response.clicked && !active {
         state.navigate(place.path.clone());
     }
@@ -1510,16 +1678,18 @@ fn place_row(state: &mut State, f: &mut Frame, index: usize, place: &Place) {
 fn place_icon(f: &mut Frame, icon: PlaceIcon) {
     use lens::sys::lens_icon_id as id;
     let icon = match icon {
-        PlaceIcon::Home => return home_icon(f, metrics::ICON),
-        PlaceIcon::Computer => return computer_icon(f, metrics::ICON),
+        PlaceIcon::Home => return home_icon(f, metrics::ICON_SMALL),
+        PlaceIcon::Computer => return computer_icon(f, metrics::ICON_SMALL),
         PlaceIcon::Desktop => id::LENS_ICON_MONITOR,
         PlaceIcon::Documents => id::LENS_ICON_FILE_TEXT,
         PlaceIcon::Downloads => id::LENS_ICON_DOWNLOAD,
         PlaceIcon::Music => id::LENS_ICON_MUSIC,
         PlaceIcon::Pictures => id::LENS_ICON_IMAGE,
         PlaceIcon::Videos => id::LENS_ICON_FILM,
+        PlaceIcon::Bookmark => id::LENS_ICON_BOOKMARK,
+        PlaceIcon::Folder => id::LENS_ICON_FOLDER,
     };
-    raw_icon(f, icon, metrics::ICON);
+    raw_icon(f, icon, metrics::ICON_SMALL);
 }
 
 /// Single click moves the keyboard cursor and selects (Ctrl toggles in
@@ -1529,6 +1699,10 @@ fn handle_click(state: &mut State, index: usize) {
         return;
     };
     state.focus_index = Some(index);
+    if entry.is_dir {
+        state.drag_source = Some(entry.path.clone());
+        state.drag_active = false;
+    }
     let now = Instant::now();
     let double = state.last_click.as_ref().is_some_and(|(path, when)| {
         *path == entry.path && now.duration_since(*when) < DOUBLE_CLICK

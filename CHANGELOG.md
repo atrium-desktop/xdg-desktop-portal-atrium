@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **GTK bookmarks and sidebar places in the file chooser.** The file chooser now loads and parses bookmarks from `$XDG_CONFIG_HOME/gtk-3.0/bookmarks`, categorizes sidebar places into standard and pinned sections, and renders compact sidebar rows.
+
 ## [0.0.24] - 2026-08-24
 
 ### Changed

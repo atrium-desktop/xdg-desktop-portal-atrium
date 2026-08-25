@@ -44,8 +44,12 @@ pub mod metrics {
     pub const FIELD_HEIGHT: f32 = 36.0;
     /// Push buttons and toolbar icon buttons.
     pub const CONTROL_HEIGHT: f32 = 32.0;
-    /// Directory-listing and sidebar-place rows (minimum; content can grow).
+    /// Directory-listing rows (minimum; content can grow).
     pub const ROW_HEIGHT: f32 = 32.0;
+    /// Compact sidebar rows.
+    pub const SIDEBAR_ROW_HEIGHT: f32 = 28.0;
+    /// Sidebar section header height.
+    pub const SIDEBAR_HEADER_HEIGHT: f32 = 20.0;
     /// Breadcrumb chips, centered inside the FIELD_HEIGHT toolbar.
     pub const CRUMB_HEIGHT: f32 = 28.0;
     /// The text caret bar inside app-owned edit surfaces.
@@ -54,7 +58,7 @@ pub mod metrics {
 
     // ---- widths --------------------------------------------------------
     /// The places sidebar.
-    pub const SIDEBAR_WIDTH: f32 = 176.0;
+    pub const SIDEBAR_WIDTH: f32 = 180.0;
     /// The preview pane (ADR-0017), mirroring the sidebar's rhythm.
     pub const PREVIEW_WIDTH: f32 = 224.0;
     /// Below this window width the preview pane collapses (browsing keeps
@@ -91,8 +95,10 @@ pub mod metrics {
     /// One corner radius for every prompt control and row, matching the
     /// theme's corner radius.
     pub const RADIUS: f32 = 8.0;
-    /// The radius of in-window material bands (the file chooser's toolbar
-    /// and places rail), mirroring `aegis-design`'s `radii.popover` (12).
+    /// Compact corner radius for sidebar items.
+    pub const RADIUS_SM: f32 = 6.0;
+    /// The radius of in-window material bands (the file chooser's toolbar),
+    /// mirroring `aegis-design`'s `radii.popover` (12).
     pub const RADIUS_PANEL: f32 = 12.0;
     /// The radius of the file chooser's preview plate, mirroring
     /// `aegis-design`'s `radii.card` (16).
