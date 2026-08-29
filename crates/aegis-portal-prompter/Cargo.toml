@@ -17,6 +17,7 @@ iris = { workspace = true }
 iris-sys = { workspace = true }
 lens = { workspace = true }
 lens-sys = { workspace = true }
+libc = { workspace = true }
 log = { workspace = true }
 mime_guess = { workspace = true }
 serde = { workspace = true }

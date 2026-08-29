@@ -49,7 +49,7 @@ request to standard input and it shows the real lens window; the response
 JSON appears on standard output when you answer, press Escape, or close
 the window. No bus, daemon, or display server setup is required. The
 `"version"` field must equal
-`aegis_portal_prompter::PROCESS_CONTRACT_VERSION` (currently `5`);
+`aegis_portal_prompter::PROCESS_CONTRACT_VERSION` (currently `6`);
 `scripts/version-consistency.sh` checks that the payloads below stay in
 sync with it.
 
@@ -122,6 +122,47 @@ latter requires a non-empty `files` list of suggested basenames), and
 any mode can embed `choices` controls. Set
 `RUST_LOG=debug` to trace failures; the dialog reports a `failed`
 response instead of crashing when no Wayland display is available.
+
+### UI Acceptance & Verification Checklist
+
+When accepting UI updates for portal dialogs, verify the following:
+
+#### 1. File Chooser (SaveFile / OpenFile / Directory)
+- **Top Navigation Group**: Segmented `[ ← → ↑ ]` buttons handle history back/forward and parent directory navigation.
+- **Breadcrumb Bar**:
+  - Displays home `🏠` or drive glyph followed by clickable path segments separated by `/`.
+  - Current folder is subtly highlighted without crowding container borders.
+  - Pressing `Ctrl+L` or selecting "Type Path" enters location text input mode.
+- **Top Actions**:
+  - `[📁+ New Folder]` opens an inline folder creation input.
+  - `[ ⋮ ]` menu displays "Show Hidden Files" (`Ctrl+H`), "Type Path" (`Ctrl+L`), "Reload" (`Ctrl+R`), and bookmark actions.
+- **Sidebar (PLACES)**:
+  - `PLACES` header is fixed at the top of the sidebar rail, neatly aligned to the left edge.
+  - Standard folders (`Home`, `Desktop`, `Documents`, `Downloads`, `Music`, `Pictures`, `Videos`) use clean capitalized labels.
+  - Active item is styled with a refined slate-blue container and bright text/icon.
+  - The scrollbar applies only to overflowing items below the header.
+- **Table / Directory Listing**:
+  - Clean, unboxed header row (`Name ▾`, `Size`, `Modified`) with muted text color.
+  - Folder icons are 18px blue glyphs, vertically aligned with item text.
+  - Formatted file sizes (`12 KB`, `1.5 MB`, `—` for folders) and timestamps (`YYYY/MM/DD HH:MM`).
+- **Footer**:
+  - Format/filter dropdown on the left.
+  - `Cancel` (secondary neutral) and `Save` / `Open` (primary accent blue) on the right.
+
+#### 2. Confirm / Permission Dialog
+- Clean window chrome with dialog title, body text, and prominent `[ Cancel ]` / `[ Continue ]` actions.
+- Theme responsiveness: inherits dark or light palette and compositor accent override.
+
+#### 3. Secret / Password Dialog
+- Masked password input field with auto-focus.
+- Return submits password; Escape cancels.
+
+#### 4. Application Chooser
+- Application grid/list with desktop app icons and titles.
+- "Remember this choice" checkbox state changes.
+
+#### 5. Notification Toast Daemon
+- Spawns unobtrusive top/corner toasts with title, message body, action buttons, and automatic expiration timeout.
 
 ### Headless End-to-End Tests
 

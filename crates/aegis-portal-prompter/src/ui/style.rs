@@ -45,20 +45,20 @@ pub mod metrics {
     /// Push buttons and toolbar icon buttons.
     pub const CONTROL_HEIGHT: f32 = 32.0;
     /// Directory-listing rows (minimum; content can grow).
-    pub const ROW_HEIGHT: f32 = 32.0;
+    pub const ROW_HEIGHT: f32 = 30.0;
     /// Compact sidebar rows.
-    pub const SIDEBAR_ROW_HEIGHT: f32 = 28.0;
+    pub const SIDEBAR_ROW_HEIGHT: f32 = 26.0;
     /// Sidebar section header height.
-    pub const SIDEBAR_HEADER_HEIGHT: f32 = 20.0;
+    pub const SIDEBAR_HEADER_HEIGHT: f32 = 18.0;
     /// Breadcrumb chips, centered inside the FIELD_HEIGHT toolbar.
-    pub const CRUMB_HEIGHT: f32 = 28.0;
+    pub const CRUMB_HEIGHT: f32 = 22.0;
     /// The text caret bar inside app-owned edit surfaces.
     pub const CARET_W: f32 = 1.5;
     pub const CARET_H: f32 = 18.0;
 
     // ---- widths --------------------------------------------------------
     /// The places sidebar.
-    pub const SIDEBAR_WIDTH: f32 = 180.0;
+    pub const SIDEBAR_WIDTH: f32 = 155.0;
     /// The preview pane (ADR-0017), mirroring the sidebar's rhythm.
     pub const PREVIEW_WIDTH: f32 = 224.0;
     /// Below this window width the preview pane collapses (browsing keeps
@@ -114,6 +114,7 @@ pub mod metrics {
 
     // ---- icons ---------------------------------------------------------
     /// Row and toolbar glyphs.
+    #[allow(dead_code)]
     pub const ICON: f32 = 16.0;
     /// The root breadcrumb's drive glyph.
     pub const ICON_SMALL: f32 = 14.0;
@@ -150,17 +151,17 @@ pub struct Palette {
 /// The dark aegis appearance (`Design::dark`).
 pub fn dark() -> Palette {
     Palette {
-        surface: Color::rgba(25, 28, 40, 255),
-        text: Color::rgba(244, 246, 252, 255),
-        text_muted: Color::rgba(183, 188, 207, 255),
-        accent: Color::rgba(102, 156, 255, 255),
-        border: Color::rgba(255, 255, 255, 42),
-        hover: Color::rgba(255, 255, 255, 24),
-        active: Color::rgba(102, 156, 255, 56),
-        field: Color::rgba(255, 255, 255, 18),
-        danger: Color::rgba(255, 124, 120, 255),
-        material: Color::rgba(255, 255, 255, 14),
-        material_border: Color::rgba(255, 255, 255, 56),
+        surface: Color::rgba(14, 18, 25, 255),
+        text: Color::rgba(242, 245, 252, 255),
+        text_muted: Color::rgba(140, 148, 168, 255),
+        accent: Color::rgba(59, 130, 246, 255),
+        border: Color::rgba(255, 255, 255, 25),
+        hover: Color::rgba(255, 255, 255, 14),
+        active: Color::rgba(45, 80, 150, 120),
+        field: Color::rgba(255, 255, 255, 10),
+        danger: Color::rgba(255, 100, 100, 255),
+        material: Color::rgba(255, 255, 255, 8),
+        material_border: Color::rgba(255, 255, 255, 24),
         scrim: Color::rgba(8, 10, 18, 118),
     }
 }

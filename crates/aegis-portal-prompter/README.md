@@ -24,3 +24,142 @@ development against a sibling optics checkout mirrors the Aegis workflow:
 One known visual difference from other toolkits: iris cannot yet import an
 exported `wayland:` parent handle through xdg-foreign-v2, so prompts map as
 independent windows rather than transient-for-parent dialogs.
+
+## Direct UI Verification & Prompter Commands
+
+Run the prompter directly from the workspace root to test and inspect any UI prompt:
+
+### FileChooser: Save File Mode
+
+```bash
+cargo run -p aegis-portal-prompter << 'EOF'
+{
+  "version": 6,
+  "prompt": {
+    "kind": "file_chooser",
+    "request": {
+      "mode": "save_file",
+      "app_id": "org.mozilla.firefox",
+      "title": "Save Web Page",
+      "accept_label": "Save",
+      "modal": true,
+      "parent_window": null,
+      "multiple": false,
+      "current_folder": null,
+      "current_name": "index.html",
+      "current_file": null,
+      "filters": [
+        {
+          "label": "Webpage, Complete",
+          "rules": [{ "kind": "glob", "value": "*.html" }]
+        },
+        {
+          "label": "All Files",
+          "rules": [{ "kind": "glob", "value": "*" }]
+        }
+      ],
+      "current_filter": null,
+      "choices": [],
+      "files": []
+    }
+  }
+}
+EOF
+```
+
+### FileChooser: Open File Mode
+
+```bash
+cargo run -p aegis-portal-prompter << 'EOF'
+{
+  "version": 6,
+  "prompt": {
+    "kind": "file_chooser",
+    "request": {
+      "mode": "open_file",
+      "app_id": "org.gnome.TextEditor",
+      "title": "Open File",
+      "accept_label": "Open",
+      "modal": true,
+      "parent_window": null,
+      "multiple": true,
+      "current_folder": null,
+      "current_name": null,
+      "current_file": null,
+      "filters": [
+        {
+          "label": "All Files",
+          "rules": [{ "kind": "glob", "value": "*" }]
+        }
+      ],
+      "current_filter": null,
+      "choices": [],
+      "files": []
+    }
+  }
+}
+EOF
+```
+
+### Confirmation Dialog
+
+```bash
+cargo run -p aegis-portal-prompter << 'EOF'
+{
+  "version": 6,
+  "prompt": {
+    "kind": "confirm",
+    "request": {
+      "title": "Camera Access",
+      "body": "org.example.App is requesting access to your camera.",
+      "accept_label": "Allow",
+      "modal": true,
+      "parent_window": null
+    }
+  }
+}
+EOF
+```
+
+### Secret / Password Dialog
+
+```bash
+cargo run -p aegis-portal-prompter << 'EOF'
+{
+  "version": 6,
+  "prompt": {
+    "kind": "secret",
+    "request": {
+      "title": "Unlock Vault",
+      "reason": "dev.aegis.Test requires your master password."
+    }
+  }
+}
+EOF
+```
+
+### Application Chooser
+
+```bash
+cargo run -p aegis-portal-prompter << 'EOF'
+{
+  "version": 6,
+  "prompt": {
+    "kind": "choose_app",
+    "request": {
+      "app_id": "dev.aegis.Test",
+      "title": "Open With",
+      "content_type": "text/plain",
+      "parent_window": null,
+      "apps": [
+        { "id": "org.gnome.TextEditor.desktop", "name": "Text Editor", "icon": null },
+        { "id": "io.neovim.nvim.desktop", "name": "Neovim", "icon": null }
+      ],
+      "choices": [
+        { "id": "remember", "label": "Remember this choice", "options": [], "selected": "false" }
+      ]
+    }
+  }
+}
+EOF
+```

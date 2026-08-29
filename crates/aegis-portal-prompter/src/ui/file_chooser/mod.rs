@@ -41,8 +41,8 @@ use preview::{PreviewPanel, PreviewState};
 use super::style::{self, ThemeInput, metrics};
 use super::{
     WindowChrome, back_icon, close_window, command_held, committed_text, computer_icon,
-    display_size, draw_texture_centered, edit_icon, escape_pressed, focus_widget, forward_icon,
-    home_icon, key_pressed, modifiers, new_folder_icon, parent_icon, raw_icon,
+    display_size, draw_texture_centered, escape_pressed, focus_widget, forward_icon, home_icon,
+    key_pressed, modifiers, more_icon, new_folder_icon, parent_icon, raw_icon,
     run_chrome_with_lifecycle, truncate_to_width, window_title,
 };
 
@@ -723,9 +723,40 @@ fn typeahead(state: &mut State, text: &str) {
     }
 }
 
-/// A small square icon button for the location toolbar; `enabled=false`
-/// draws it muted and inert.
-fn icon_tool_button(
+fn icon_tool_button_rect(
+    f: &mut Frame,
+    id: &str,
+    palette: &style::Palette,
+    enabled: bool,
+    icon: impl Fn(&mut Frame),
+) -> (bool, lens::Rect) {
+    f.size_next(metrics::CONTROL_HEIGHT, metrics::CONTROL_HEIGHT);
+    if !enabled {
+        f.push_style(style::muted_style_for(palette));
+    }
+    let (response, ()) = f.pressable_row(
+        id,
+        "",
+        &LayoutOpts {
+            radius: metrics::RADIUS,
+            bg: palette.material,
+            border: palette.material_border,
+            cross: Align::Center,
+            ..Default::default()
+        },
+        |f, _| {
+            f.centered(metrics::CONTROL_HEIGHT, metrics::CONTROL_HEIGHT, |f| {
+                icon(f);
+            });
+        },
+    );
+    if !enabled {
+        f.pop_style();
+    }
+    (enabled && response.clicked, response.rect)
+}
+
+fn icon_nav_button(
     f: &mut Frame,
     id: &str,
     palette: &style::Palette,
@@ -736,20 +767,53 @@ fn icon_tool_button(
     if !enabled {
         f.push_style(style::muted_style_for(palette));
     }
-    // Lens containers align only on the cross axis and pack the main axis
-    // from the start, so `centered` supplies the main-axis centring: the
-    // glyph sits at the optical centre of the square button on both axes.
     let (response, ()) = f.pressable_row(
         id,
         "",
         &LayoutOpts {
-            radius: metrics::RADIUS,
+            radius: metrics::RADIUS_SM,
+            cross: Align::Center,
             ..Default::default()
         },
         |f, _| {
             f.centered(metrics::CONTROL_HEIGHT, metrics::CONTROL_HEIGHT, |f| {
-                icon(f)
-            })
+                icon(f);
+            });
+        },
+    );
+    if !enabled {
+        f.pop_style();
+    }
+    enabled && response.clicked
+}
+
+fn button_with_icon(
+    f: &mut Frame,
+    id: &str,
+    palette: &style::Palette,
+    enabled: bool,
+    icon: impl Fn(&mut Frame),
+    label: &str,
+) -> bool {
+    if !enabled {
+        f.push_style(style::muted_style_for(palette));
+    }
+    let (response, ()) = f.pressable_row(
+        id,
+        "",
+        &LayoutOpts {
+            height: metrics::CONTROL_HEIGHT,
+            radius: metrics::RADIUS,
+            bg: palette.material,
+            border: palette.material_border,
+            pad: metrics::SPACE_S,
+            gap: metrics::SPACE_S,
+            cross: Align::Center,
+            ..Default::default()
+        },
+        |f, _| {
+            icon(f);
+            f.label(label);
         },
     );
     if !enabled {
@@ -762,8 +826,10 @@ fn icon_tool_button(
 fn popup_open(state: &State, f: &mut Frame) -> bool {
     let filter_open = f.place_is_open(&format!("{FILTER_DROPDOWN}##ov"));
     let place_ctx_open = f.place_is_open("place-context") || f.place_is_open("place-context##ov");
+    let more_menu_open = f.place_is_open("more-menu") || f.place_is_open("more-menu##ov");
     filter_open
         || place_ctx_open
+        || more_menu_open
         || state
             .request
             .choices
@@ -910,105 +976,129 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
         },
         |f| {
             // ---- location toolbar --------------------------------------
-            // Pinned to the field height so swapping the breadcrumb chips
-            // for the location field never moves the rest of the dialog.
             f.row_ex(
                 &LayoutOpts {
-                    gap: metrics::SPACE_S,
+                    gap: metrics::SPACE_M,
                     height: metrics::FIELD_HEIGHT,
                     cross: Align::Center,
                     ..Default::default()
                 },
                 |f| {
-                    let current_dir = state.dir.clone();
-                    if icon_tool_button(
+                    // Navigation controls group [ ←  →  ↑ ]
+                    f.row_ex(
+                        &LayoutOpts {
+                            height: metrics::CONTROL_HEIGHT,
+                            radius: metrics::RADIUS,
+                            bg: palette.material,
+                            border: palette.material_border,
+                            pad: 2.0,
+                            gap: 1.0,
+                            cross: Align::Center,
+                            ..Default::default()
+                        },
+                        |f| {
+                            let current_dir = state.dir.clone();
+                            if icon_nav_button(
+                                f,
+                                "go-back",
+                                &palette,
+                                state.history.back().is_some(),
+                                |f| back_icon(f, metrics::ICON_SMALL),
+                            ) && let Some(target) = state.history.go_back(&current_dir)
+                            {
+                                state.navigate_history(target);
+                            }
+                            if icon_nav_button(
+                                f,
+                                "go-forward",
+                                &palette,
+                                state.history.forward().is_some(),
+                                |f| forward_icon(f, metrics::ICON_SMALL),
+                            ) && let Some(target) = state.history.go_forward(&current_dir)
+                            {
+                                state.navigate_history(target);
+                            }
+                            if icon_nav_button(
+                                f,
+                                "go-parent",
+                                &palette,
+                                state.dir.parent().is_some(),
+                                |f| parent_icon(f, metrics::ICON_SMALL),
+                            ) && let Some(parent) = state.dir.parent().map(Path::to_path_buf)
+                            {
+                                state.navigate(parent);
+                            }
+                        },
+                    );
+
+                    // Center path / breadcrumb container
+                    f.row_ex(
+                        &LayoutOpts {
+                            flex: if state.location_editing { 1.0 } else { 0.0 },
+                            height: metrics::CONTROL_HEIGHT,
+                            radius: metrics::RADIUS,
+                            bg: palette.material,
+                            border: palette.material_border,
+                            pad: metrics::SPACE_XS,
+                            gap: metrics::SPACE_S,
+                            cross: Align::Center,
+                            ..Default::default()
+                        },
+                        |f| {
+                            if state.location_editing {
+                                f.flex(1.0);
+                                if state.location_caret_end {
+                                    f.textfield_set_caret("location-path", u32::MAX);
+                                    state.location_caret_end = false;
+                                }
+                                f.textfield_placeholder(
+                                    "location-path",
+                                    &mut state.location,
+                                    "Type a path…",
+                                );
+                                let response = f.response();
+                                state.location_field_focused = response.focused;
+                                if !response.focused {
+                                    focus_widget(f, "location-path");
+                                }
+                                if response.clicked {
+                                    go_location(state);
+                                }
+                            } else {
+                                breadcrumb(state, f);
+                            }
+                        },
+                    );
+
+                    if !state.location_editing {
+                        f.flex(1.0);
+                        f.spacer(0.0);
+                    }
+
+                    // Right toolbar actions: [ New Folder ] and [ ⋮ More ]
+                    if button_with_icon(
                         f,
-                        "go-back",
+                        "btn-new-folder",
                         &palette,
-                        state.history.back().is_some(),
-                        |f| back_icon(f, metrics::ICON),
-                    ) && let Some(target) = state.history.go_back(&current_dir)
-                    {
-                        state.navigate_history(target);
-                    }
-                    if icon_tool_button(
-                        f,
-                        "go-forward",
-                        &palette,
-                        state.history.forward().is_some(),
-                        |f| forward_icon(f, metrics::ICON),
-                    ) && let Some(target) = state.history.go_forward(&current_dir)
-                    {
-                        state.navigate_history(target);
-                    }
-                    if icon_tool_button(
-                        f,
-                        "go-parent",
-                        &palette,
-                        state.dir.parent().is_some(),
-                        |f| parent_icon(f, metrics::ICON),
-                    ) && let Some(parent) = state.dir.parent().map(Path::to_path_buf)
-                    {
-                        state.navigate(parent);
-                    }
-                    if icon_tool_button(f, "go-home", &palette, true, |f| {
-                        home_icon(f, metrics::ICON)
-                    }) && let Some(home) = std::env::home_dir()
-                    {
-                        state.navigate(home);
-                    }
-                    if icon_tool_button(f, "new-folder", &palette, true, |f| {
-                        new_folder_icon(f, metrics::ICON)
-                    }) {
-                        state.creating_folder = true;
-                        state.folder_focus = true;
+                        true,
+                        |f| new_folder_icon(f, metrics::ICON_SMALL),
+                        "New Folder",
+                    ) {
+                        state.creating_folder = !state.creating_folder;
+                        state.folder_focus = state.creating_folder;
                         state.folder_error = None;
                         state.folder_name.set("");
                     }
-                    let is_current_pinned = state.places.iter().any(|p| p.path == state.dir);
-                    if icon_tool_button(f, "pin-folder", &palette, !is_current_pinned, |f| {
-                        raw_icon(
-                            f,
-                            lens::sys::lens_icon_id::LENS_ICON_BOOKMARK,
-                            metrics::ICON,
-                        )
-                    }) {
-                        state.pin_path(state.dir.clone(), None);
-                    }
-                    if state.location_editing {
-                        f.flex(1.0);
-                        if state.location_caret_end {
-                            // Caret setters resolve in the field's own id
-                            // scope, so they run here, right before the
-                            // field builds — not at the rewrite site.
-                            f.textfield_set_caret("location-path", u32::MAX);
-                            state.location_caret_end = false;
-                        }
-                        f.textfield_placeholder(
-                            "location-path",
-                            &mut state.location,
-                            "Type a path",
-                        );
-                        let response = f.response();
-                        state.location_field_focused = response.focused;
-                        if !response.focused {
-                            // The field owns input for as long as the mode
-                            // is open: Tab completion and stray clicks move
-                            // lens focus, so pull it back.
-                            focus_widget(f, "location-path");
-                        }
-                        if response.clicked {
-                            go_location(state);
-                        }
-                    } else {
-                        breadcrumb(state, f);
-                        f.flex(1.0);
-                        f.spacer(0.0);
-                        if icon_tool_button(f, "edit-location", &palette, true, |f| {
-                            edit_icon(f, metrics::ICON)
-                        }) {
-                            start_location_edit(state);
-                        }
+
+                    let (more_clicked, more_rect) = icon_tool_button_rect(
+                        f,
+                        "more-menu-btn",
+                        &palette,
+                        true,
+                        |f| more_icon(f, metrics::ICON_SMALL),
+                    );
+                    if more_clicked {
+                        f.context_menu_open("more-menu", more_rect);
                     }
                 },
             );
@@ -1097,41 +1187,42 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                 |f| {
                     // The places rail: clean, flat, and compact, separated from the browsing column by a hairline.
                     let sidebar_opts = LayoutOpts {
-                        width: metrics::SIDEBAR_WIDTH,
+                        width: 155.0,
                         ..Default::default()
                     };
                     f.column_ex(&sidebar_opts, |f| {
+                        let standard_places: Vec<(usize, Place)> = state
+                            .places
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, p)| p.section == PlaceSection::Standard)
+                            .map(|(i, p)| (i, p.clone()))
+                            .collect();
+
+                        let pinned_places: Vec<(usize, Place)> = state
+                            .places
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, p)| p.section == PlaceSection::Pinned)
+                            .map(|(i, p)| (i, p.clone()))
+                            .collect();
+
+                        if !standard_places.is_empty() {
+                            sidebar_section_header(f, "PLACES", &palette);
+                        }
+
                         f.scroll("chooser-places", |f| {
-                            let content_w = metrics::SIDEBAR_WIDTH - 8.0;
+                            let content_w = 155.0 - 8.0;
                             f.column_ex(
                                 &LayoutOpts {
                                     width: content_w,
                                     gap: 1.0,
-                                    pad: metrics::SPACE_XXS,
+                                    pad: 0.0,
                                     ..Default::default()
                                 },
                                 |f| {
-                                    let standard_places: Vec<(usize, Place)> = state
-                                        .places
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(_, p)| p.section == PlaceSection::Standard)
-                                        .map(|(i, p)| (i, p.clone()))
-                                        .collect();
-
-                                    let pinned_places: Vec<(usize, Place)> = state
-                                        .places
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(_, p)| p.section == PlaceSection::Pinned)
-                                        .map(|(i, p)| (i, p.clone()))
-                                        .collect();
-
-                                    if !standard_places.is_empty() {
-                                        sidebar_section_header(f, "PLACES", &palette);
-                                        for (index, place) in &standard_places {
-                                            place_row(state, f, *index, place);
-                                        }
+                                    for (index, place) in &standard_places {
+                                        place_row(state, f, *index, place);
                                     }
 
                                     if !pinned_places.is_empty() || state.drag_active {
@@ -1148,10 +1239,10 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                             );
                         });
                     });
-                    f.separator();
                     f.column_ex(
                         &LayoutOpts {
                             flex: 1.0,
+                            gap: metrics::SPACE_XS,
                             ..Default::default()
                         },
                         |f| {
@@ -1165,6 +1256,25 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                                 f.label_sized("This folder is empty", metrics::FONT_SMALL);
                                 f.pop_style();
                             }
+                            // Clean table header matching design
+                            f.row_ex(
+                                &LayoutOpts {
+                                    height: 24.0,
+                                    cross: Align::Center,
+                                    pad: metrics::SPACE_XS,
+                                    ..Default::default()
+                                },
+                                |f| {
+                                    f.push_style(style::small_muted_style_for(&palette));
+                                    f.flex(1.0);
+                                    f.label("Name ▾");
+                                    f.size_next(100.0, 20.0);
+                                    f.label("Size");
+                                    f.size_next(160.0, 20.0);
+                                    f.label("Modified");
+                                    f.pop_style();
+                                },
+                            );
                             f.flex(1.0);
                             // The table's id derives from the directory, so
                             // its retained scroll position is
@@ -1177,13 +1287,26 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                             let mut cursor = state.focus_index.map_or(-1, |index| index as i32);
                             let entries = &state.entries;
                             let selected = &state.selected;
-                            let result = f.table_ex(
-                                &table_id,
-                                &[TableColumn {
+                            let columns = [
+                                TableColumn {
                                     title: "Name",
                                     width: 0.0,
                                     align: Align::Start,
-                                }],
+                                },
+                                TableColumn {
+                                    title: "Size",
+                                    width: 100.0,
+                                    align: Align::Start,
+                                },
+                                TableColumn {
+                                    title: "Modified",
+                                    width: 160.0,
+                                    align: Align::Start,
+                                },
+                            ];
+                            let result = f.table_ex(
+                                &table_id,
+                                &columns,
                                 entries.len(),
                                 TableOpts {
                                     row_height: metrics::ROW_HEIGHT,
@@ -1192,13 +1315,22 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                                     zebra: false,
                                     keyboard: true,
                                 },
-                                |row, _col| entries[row].name.clone(),
-                                |row, _col| {
-                                    Some(if entries[row].is_dir {
-                                        lens::sys::lens_icon_id::LENS_ICON_FOLDER
+                                |row, col| match col {
+                                    0 => entries[row].name.clone(),
+                                    1 => entries[row].size_display(),
+                                    2 => entries[row].modified_display(),
+                                    _ => String::new(),
+                                },
+                                |row, col| {
+                                    if col == 0 {
+                                        Some(if entries[row].is_dir {
+                                            lens::sys::lens_icon_id::LENS_ICON_FOLDER
+                                        } else {
+                                            lens::sys::lens_icon_id::LENS_ICON_FILE
+                                        })
                                     } else {
-                                        lens::sys::lens_icon_id::LENS_ICON_FILE
-                                    })
+                                        None
+                                    }
                                 },
                                 |row| selected.contains(&entries[row].path),
                                 &mut cursor,
@@ -1398,6 +1530,32 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
         }
     });
 
+    // ---- context menu for more options ---------------------------------
+    f.context_menu("more-menu", |f| {
+        if f.menu_item_checked("Show Hidden Files", "Ctrl+H", state.show_hidden) {
+            state.show_hidden = !state.show_hidden;
+            state.reload = true;
+        }
+        if f.menu_item("Type Path", "Ctrl+L") {
+            start_location_edit(state);
+        }
+        if f.menu_item("Reload", "Ctrl+R") {
+            state.reload = true;
+        }
+        f.menu_separator();
+        let current_dir = state.dir.clone();
+        let is_pinned = state.places.iter().any(|p| p.path == current_dir);
+        if is_pinned {
+            if f.menu_item("Remove from Places", "") {
+                state.unpin_path(&current_dir);
+            }
+        } else {
+            if f.menu_item("Add to Places", "") {
+                state.pin_path(current_dir, None);
+            }
+        }
+    });
+
     // Backspace walks up one folder when no text field owns the key.
     if key_pressed(input, key::BACKSPACE)
         && !state.location_editing
@@ -1416,34 +1574,44 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
 fn breadcrumb(state: &mut State, f: &mut Frame) {
     let palette = state.appearance.palette();
     let chain = breadcrumbs(&state.dir);
-    let hidden = chain.len().saturating_sub(4);
+    let home = std::env::home_dir();
+    let is_under_home = home.as_ref().is_some_and(|h| state.dir.starts_with(h));
+
+    if is_under_home {
+        home_icon(f, metrics::ICON_SMALL);
+    } else {
+        computer_icon(f, metrics::ICON_SMALL);
+    }
+
+    let visible_chain: Vec<&PathBuf> = if chain.len() > 1 {
+        chain.iter().filter(|p| p.parent().is_some()).collect()
+    } else {
+        chain.iter().collect()
+    };
+
+    let hidden = visible_chain.len().saturating_sub(4);
     if hidden > 0 {
         f.push_style(style::muted_style_for(&palette));
         f.label("…");
         f.pop_style();
     }
-    let last = chain.len().saturating_sub(1);
-    for (position, component) in chain.into_iter().skip(hidden).enumerate() {
+    let last = visible_chain.len().saturating_sub(1);
+    for (position, component) in visible_chain.into_iter().skip(hidden).enumerate() {
         if position > 0 || hidden > 0 {
             f.push_style(style::muted_style_for(&palette));
-            f.label("›");
+            f.label("/");
             f.pop_style();
         }
         let current = hidden + position == last;
         crumb_button(
             state,
             f,
-            &component,
+            component,
             position,
             current,
-            palette_active(state),
+            Color::rgba(40, 70, 130, 160),
         );
     }
-}
-
-/// The current accent wash, resolved from the state's theme preference.
-fn palette_active(state: &State) -> Color {
-    style::palette(state.appearance.dark()).active
 }
 
 /// One breadcrumb segment: the root shows a drive glyph, folders show
@@ -1457,6 +1625,7 @@ fn crumb_button(
     active_bg: Color,
 ) {
     let is_root = component.parent().is_none();
+    let palette = state.appearance.palette();
     let opts = LayoutOpts {
         gap: metrics::SPACE_XS,
         pad: metrics::SPACE_XS,
@@ -1467,17 +1636,23 @@ fn crumb_button(
         } else {
             Color::TRANSPARENT
         },
-        radius: metrics::RADIUS,
+        radius: metrics::RADIUS_SM,
         ..Default::default()
     };
     let name = truncate_to_width(f, &crumb_name(component), metrics::CRUMB_MAX_W);
+    if !current {
+        f.push_style(style::muted_style_for(&palette));
+    }
     let (response, ()) = f.pressable_row(&format!("crumb-{position}"), "", &opts, |f, _| {
         if is_root {
-            computer_icon(f, metrics::ICON_SMALL);
+            f.label("/");
         } else {
             f.label(&name);
         }
     });
+    if !current {
+        f.pop_style();
+    }
     if response.clicked && !current {
         state.navigate(component.to_path_buf());
     }
@@ -1611,11 +1786,11 @@ fn sidebar_section_header(f: &mut Frame, title: &str, palette: &style::Palette) 
         &LayoutOpts {
             height: metrics::SIDEBAR_HEADER_HEIGHT,
             cross: Align::Center,
-            pad: metrics::SPACE_XS,
+            pad: 2.0,
             ..Default::default()
         },
         |f| {
-            f.label_sized(title, metrics::FONT_SMALL);
+            f.label_sized(title, 11.0);
         },
     );
     f.pop_style();
@@ -1643,26 +1818,52 @@ fn drop_indicator(f: &mut Frame, palette: &style::Palette) {
     });
 }
 
+fn place_label(place: &Place) -> &str {
+    if place.section == PlaceSection::Standard {
+        match place.icon {
+            PlaceIcon::Home => "Home",
+            PlaceIcon::Desktop => "Desktop",
+            PlaceIcon::Documents => "Documents",
+            PlaceIcon::Downloads => "Downloads",
+            PlaceIcon::Music => "Music",
+            PlaceIcon::Pictures => "Pictures",
+            PlaceIcon::Videos => "Videos",
+            PlaceIcon::Computer => "Computer",
+            PlaceIcon::Bookmark => &place.name,
+        }
+    } else {
+        &place.name
+    }
+}
+
 /// One sidebar shortcut row, highlighted when it is the browsed folder.
 fn place_row(state: &mut State, f: &mut Frame, index: usize, place: &Place) {
     let active = state.dir == place.path;
+    let palette = state.appearance.palette();
     let opts = LayoutOpts {
         gap: metrics::SPACE_S,
         pad: metrics::SPACE_XS,
         min_height: metrics::SIDEBAR_ROW_HEIGHT,
         cross: Align::Center,
         bg: if active {
-            palette_active(state)
+            Color::rgba(35, 60, 110, 160)
         } else {
             Color::TRANSPARENT
         },
         radius: metrics::RADIUS_SM,
         ..Default::default()
     };
+    if !active {
+        f.push_style(style::muted_style_for(&palette));
+    }
+    let label = place_label(place);
     let (response, ()) = f.pressable_row(&format!("place-{index}"), "", &opts, |f, _| {
         place_icon(f, place.icon);
-        f.label(&place.name);
+        f.label(label);
     });
+    if !active {
+        f.pop_style();
+    }
     if response.pressed && state.drag_source.is_none() {
         state.drag_source = Some(place.path.clone());
         state.drag_active = false;

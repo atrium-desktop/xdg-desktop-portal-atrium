@@ -561,12 +561,12 @@ pub fn new_folder_icon(frame: &mut Frame, size: f32) {
     raw_icon(frame, lens::sys::lens_icon_id::LENS_ICON_FOLDER_PLUS, size);
 }
 
-/// The pencil glyph for the "type a path" toggle.
-pub fn edit_icon(frame: &mut Frame, size: f32) {
-    raw_icon(frame, lens::sys::lens_icon_id::LENS_ICON_EDIT_2, size);
-}
-
 /// The drive glyph for the filesystem root (breadcrumb and places).
 pub fn computer_icon(frame: &mut Frame, size: f32) {
     raw_icon(frame, lens::sys::lens_icon_id::LENS_ICON_HARD_DRIVE, size);
+}
+
+/// The three-dots menu glyph for the more-options dropdown.
+pub fn more_icon(frame: &mut Frame, size: f32) {
+    raw_icon(frame, lens::sys::lens_icon_id::LENS_ICON_MORE_VERTICAL, size);
 }

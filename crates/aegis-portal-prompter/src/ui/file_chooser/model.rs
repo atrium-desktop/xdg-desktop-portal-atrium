@@ -12,6 +12,80 @@ pub struct Entry {
     /// Display name (lossy; the path bytes stay exact).
     pub name: String,
     pub is_dir: bool,
+    pub size: Option<u64>,
+    pub modified: Option<std::time::SystemTime>,
+}
+
+impl Entry {
+    #[cfg(test)]
+    #[must_use]
+    pub fn new(path: PathBuf, name: String, is_dir: bool) -> Self {
+        Self {
+            path,
+            name,
+            is_dir,
+            size: None,
+            modified: None,
+        }
+    }
+
+    #[must_use]
+    pub fn size_display(&self) -> String {
+        if self.is_dir {
+            "—".to_string()
+        } else if let Some(bytes) = self.size {
+            format_file_size(bytes)
+        } else {
+            "—".to_string()
+        }
+    }
+
+    #[must_use]
+    pub fn modified_display(&self) -> String {
+        if let Some(time) = self.modified {
+            format_system_time(time)
+        } else {
+            "—".to_string()
+        }
+    }
+}
+
+pub fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+
+    if bytes < KB {
+        format!("{bytes} B")
+    } else if bytes < MB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else if bytes < GB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    }
+}
+
+pub fn format_system_time(time: std::time::SystemTime) -> String {
+    let Ok(duration) = time.duration_since(std::time::UNIX_EPOCH) else {
+        return "—".to_string();
+    };
+    let secs = duration.as_secs() as libc::time_t;
+    let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
+    let ptr = unsafe { libc::localtime_r(&secs, tm.as_mut_ptr()) };
+    if !ptr.is_null() {
+        let tm = unsafe { tm.assume_init() };
+        format!(
+            "{:04}/{:02}/{:02} {:02}:{:02}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min
+        )
+    } else {
+        "—".to_string()
+    }
 }
 
 /// Read `dir` into dialog rows: directories first, then files, each group
@@ -41,14 +115,23 @@ pub fn list_dir(
         if !show_hidden && name.starts_with('.') {
             continue;
         }
-        let is_dir = item.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
+        let metadata = item.metadata().ok();
+        let is_dir = metadata
+            .as_ref()
+            .map(|m| m.is_dir())
+            .or_else(|| item.file_type().map(|kind| kind.is_dir()).ok())
+            .unwrap_or(false);
         if !is_dir && filter.is_some_and(|filter| !filter_allows(filter, &item.path())) {
             continue;
         }
+        let size = metadata.as_ref().map(|m| m.len());
+        let modified = metadata.as_ref().and_then(|m| m.modified().ok());
         entries.push(Entry {
             path: item.path(),
             name,
             is_dir,
+            size,
+            modified,
         });
     }
     entries.sort_by(|left, right| {
@@ -210,12 +293,23 @@ pub fn places() -> Vec<Place> {
         if dirs.is_empty() {
             dirs = USER_DIR_KEYS
                 .iter()
-                .map(|(_, name, icon)| Place {
-                    name: (*name).to_owned(),
-                    path: home.join(name),
-                    icon: *icon,
-                    section: PlaceSection::Standard,
-                    custom: false,
+                .map(|(_, name, icon)| {
+                    let cap = home.join(name);
+                    let lower = home.join(name.to_lowercase());
+                    let path = if cap.is_dir() {
+                        cap
+                    } else if lower.is_dir() {
+                        lower
+                    } else {
+                        cap
+                    };
+                    Place {
+                        name: (*name).to_owned(),
+                        path,
+                        icon: *icon,
+                        section: PlaceSection::Standard,
+                        custom: false,
+                    }
                 })
                 .collect();
         }
@@ -700,16 +794,8 @@ XDG_UNKNOWN_DIR=\"$HOME/ignored\"
     #[test]
     fn typeahead_matches_case_insensitively() {
         let entries = vec![
-            Entry {
-                path: PathBuf::from("/tmp/Docs"),
-                name: "Docs".to_owned(),
-                is_dir: true,
-            },
-            Entry {
-                path: PathBuf::from("/tmp/beta.txt"),
-                name: "beta.txt".to_owned(),
-                is_dir: false,
-            },
+            Entry::new(PathBuf::from("/tmp/Docs"), "Docs".to_owned(), true),
+            Entry::new(PathBuf::from("/tmp/beta.txt"), "beta.txt".to_owned(), false),
         ];
         assert_eq!(typeahead_index(&entries, "be"), Some(1));
         assert_eq!(typeahead_index(&entries, "DO"), Some(0));
@@ -787,5 +873,22 @@ XDG_UNKNOWN_DIR=\"$HOME/ignored\"
         assert_eq!(loaded[1].name, "Notes");
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn size_and_date_formatting() {
+        use super::format_file_size;
+
+        assert_eq!(format_file_size(500), "500 B");
+        assert_eq!(format_file_size(1024), "1.0 KB");
+        assert_eq!(format_file_size(1536), "1.5 KB");
+        assert_eq!(format_file_size(1024 * 1024 * 3), "3.0 MB");
+
+        let dir_entry = Entry::new(PathBuf::from("/tmp/dir"), "dir".to_string(), true);
+        assert_eq!(dir_entry.size_display(), "—");
+
+        let mut file_entry = Entry::new(PathBuf::from("/tmp/f.txt"), "f.txt".to_string(), false);
+        file_entry.size = Some(2048);
+        assert_eq!(file_entry.size_display(), "2.0 KB");
     }
 }
