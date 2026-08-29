@@ -881,7 +881,9 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
         }
     } else if mouse_left_released || !mouse_left_down {
         if state.drag_active {
-            if cursor_pos.0 >= 0.0 && cursor_pos.0 <= metrics::SIDEBAR_WIDTH + metrics::SPACE_M * 2.0 {
+            if cursor_pos.0 >= 0.0
+                && cursor_pos.0 <= metrics::SIDEBAR_WIDTH + metrics::SPACE_M * 2.0
+            {
                 if let Some(source) = state.drag_source.take() {
                     state.pin_path(source, None);
                 }
@@ -968,13 +970,13 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                         state.folder_name.set("");
                     }
                     let is_current_pinned = state.places.iter().any(|p| p.path == state.dir);
-                    if icon_tool_button(
-                        f,
-                        "pin-folder",
-                        &palette,
-                        !is_current_pinned,
-                        |f| raw_icon(f, lens::sys::lens_icon_id::LENS_ICON_BOOKMARK, metrics::ICON),
-                    ) {
+                    if icon_tool_button(f, "pin-folder", &palette, !is_current_pinned, |f| {
+                        raw_icon(
+                            f,
+                            lens::sys::lens_icon_id::LENS_ICON_BOOKMARK,
+                            metrics::ICON,
+                        )
+                    }) {
                         state.pin_path(state.dir.clone(), None);
                     }
                     if state.location_editing {
@@ -1634,7 +1636,11 @@ fn drop_indicator(f: &mut Frame, palette: &style::Palette) {
         ..Default::default()
     };
     f.row_ex(&opts, |f| {
-        raw_icon(f, lens::sys::lens_icon_id::LENS_ICON_FOLDER_PLUS, metrics::ICON_SMALL);
+        raw_icon(
+            f,
+            lens::sys::lens_icon_id::LENS_ICON_FOLDER_PLUS,
+            metrics::ICON_SMALL,
+        );
         f.push_style(style::small_muted_style_for(palette));
         f.label_sized("Drop to Pin", metrics::FONT_SMALL);
         f.pop_style();

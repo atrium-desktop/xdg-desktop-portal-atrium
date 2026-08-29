@@ -359,7 +359,9 @@ pub fn save_bookmarks(home: Option<&Path>, places: &[Place]) -> std::io::Result<
     for place in places.iter().filter(|p| p.custom) {
         let encoded_path = url_encode(&place.path.to_string_lossy());
         let default_name = place.path.file_name().map(|n| n.to_string_lossy());
-        if let Some(def) = default_name && place.name != def {
+        if let Some(def) = default_name
+            && place.name != def
+        {
             out.push_str(&format!("file://{encoded_path} {}\n", place.name));
         } else {
             out.push_str(&format!("file://{encoded_path}\n"));
@@ -376,7 +378,9 @@ fn url_decode(s: &str) -> String {
             let h1 = chars.next();
             let h2 = chars.next();
             if let (Some(h1), Some(h2)) = (h1, h2) {
-                if let Ok(val) = u8::from_str_radix(std::str::from_utf8(&[h1, h2]).unwrap_or(""), 16) {
+                if let Ok(val) =
+                    u8::from_str_radix(std::str::from_utf8(&[h1, h2]).unwrap_or(""), 16)
+                {
                     bytes.push(val);
                     continue;
                 }

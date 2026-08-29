@@ -259,7 +259,9 @@ impl SecretService {
         }
         if state.is_keyfile_mode() {
             match state.unlock_with_keyfile() {
-                Ok(()) => log::info!("portal: secret vault re-unlocked from keyfile with the session"),
+                Ok(()) => {
+                    log::info!("portal: secret vault re-unlocked from keyfile with the session")
+                }
                 Err(error) => {
                     log::warn!("portal: keyfile re-unlock after session unlock failed: {error}")
                 }
@@ -330,13 +332,17 @@ impl SecretService {
                     }
                 };
 
-                let watch_mask = libc::IN_CREATE | libc::IN_MOVED_TO | libc::IN_CLOSE_WRITE | libc::IN_ATTRIB;
-                let mut wd = unsafe { libc::inotify_add_watch(inotify_fd, c_path.as_ptr(), watch_mask) };
+                let watch_mask =
+                    libc::IN_CREATE | libc::IN_MOVED_TO | libc::IN_CLOSE_WRITE | libc::IN_ATTRIB;
+                let mut wd =
+                    unsafe { libc::inotify_add_watch(inotify_fd, c_path.as_ptr(), watch_mask) };
 
                 let mut buffer = [0u8; 4096];
                 loop {
                     if wd < 0 {
-                        wd = unsafe { libc::inotify_add_watch(inotify_fd, c_path.as_ptr(), watch_mask) };
+                        wd = unsafe {
+                            libc::inotify_add_watch(inotify_fd, c_path.as_ptr(), watch_mask)
+                        };
                         if wd < 0 {
                             try_consume();
                             std::thread::sleep(Duration::from_millis(200));
