@@ -377,13 +377,12 @@ fn url_decode(s: &str) -> String {
         if b == b'%' {
             let h1 = chars.next();
             let h2 = chars.next();
-            if let (Some(h1), Some(h2)) = (h1, h2) {
-                if let Ok(val) =
+            if let (Some(h1), Some(h2)) = (h1, h2)
+                && let Ok(val) =
                     u8::from_str_radix(std::str::from_utf8(&[h1, h2]).unwrap_or(""), 16)
-                {
-                    bytes.push(val);
-                    continue;
-                }
+            {
+                bytes.push(val);
+                continue;
             }
         }
         bytes.push(b);

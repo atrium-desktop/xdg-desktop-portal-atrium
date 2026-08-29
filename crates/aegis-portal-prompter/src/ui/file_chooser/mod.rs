@@ -871,23 +871,19 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
     let mouse_left_down = input.as_raw().mouse_down[0];
     let mouse_left_released = input.as_raw().mouse_released[0];
 
-    if mouse_left_down {
-        if let Some(_) = &state.drag_source {
-            let dx = cursor_pos.0 - state.drag_start.0;
-            let dy = cursor_pos.1 - state.drag_start.1;
-            if dx * dx + dy * dy > 16.0 {
-                state.drag_active = true;
-            }
+    if mouse_left_down && state.drag_source.is_some() {
+        let dx = cursor_pos.0 - state.drag_start.0;
+        let dy = cursor_pos.1 - state.drag_start.1;
+        if dx * dx + dy * dy > 16.0 {
+            state.drag_active = true;
         }
     } else if mouse_left_released || !mouse_left_down {
-        if state.drag_active {
-            if cursor_pos.0 >= 0.0
-                && cursor_pos.0 <= metrics::SIDEBAR_WIDTH + metrics::SPACE_M * 2.0
-            {
-                if let Some(source) = state.drag_source.take() {
-                    state.pin_path(source, None);
-                }
-            }
+        if state.drag_active
+            && cursor_pos.0 >= 0.0
+            && cursor_pos.0 <= metrics::SIDEBAR_WIDTH + metrics::SPACE_M * 2.0
+            && let Some(source) = state.drag_source.take()
+        {
+            state.pin_path(source, None);
         }
         state.drag_source = None;
         state.drag_active = false;
