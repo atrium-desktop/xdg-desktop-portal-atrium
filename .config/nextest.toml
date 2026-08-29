@@ -1,0 +1,11 @@
+# .config/nextest.toml
+# Nextest configuration for workspace test execution.
+
+[profile.default]
+# Kill hung tests after 15s to prevent infinite deadlocks
+slow-timeout = { period = "15s", terminate-after = 1 }
+retries = 0
+
+[profile.ci]
+retries = 1
+failure-output = "immediate-final"

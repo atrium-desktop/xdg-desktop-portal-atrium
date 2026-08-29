@@ -216,9 +216,11 @@ pub struct DevicePtr(*mut flux_sys::flux_device);
 impl DevicePtr {
     /// Wrap the device pointer an iris [`StartHost`] handed over.
     fn from_host(host: &StartHost) -> DevicePtr {
-        // The iris and flux bindings declare ABI-identical opaque
-        // `flux_device` pointers, so the c_void seam is a plain cast.
-        DevicePtr(host.device() as *mut flux_sys::flux_device)
+        // The iris host borrows iris's device through the typed
+        // `flux::Device` seam; the raw pointer underneath it is the
+        // shared-bindgen `flux_device*` (the `-sys` crates re-export one
+        // view), so no re-type is needed at this seam anymore.
+        DevicePtr(host.flux_device().as_raw())
     }
 
     /// The raw pointer, for the FFI island's texture creation.
@@ -354,11 +356,9 @@ pub fn draw_texture_centered(frame: &mut Frame, texture: &TextureHandle, width: 
     frame.centered(width, height, |f| {
         // SAFETY: texture is owned by the dialog state and stays alive
         // past this frame's render; w/h are positive finite dimensions.
-        // The lens and flux bindings declare ABI-identical flux_image
-        // pointers, so the cast is a plain re-type of the opaque handle.
-        unsafe {
-            lens::sys::lens_image(f.as_raw(), texture.raw as *mut lens::sys::flux_image, w, h);
-        }
+        // The seam shares the bindgen view of `flux_image`, so the
+        // pointer lens takes is the very one flux created.
+        unsafe { lens::sys::lens_image(f.as_raw(), texture.raw, w, h) };
     });
 }
 

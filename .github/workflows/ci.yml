@@ -124,11 +124,17 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - name: Test
         env:
           AEGIS_PORTAL_REQUIRE_E2E: "1"
           AEGIS_PORTAL_REQUIRE_PIPEWIRE_E2E: "1"
-        run: cargo test --locked --workspace
+        run: |
+          cargo nextest run --profile ci --locked --workspace
+          cargo test --doc --locked --workspace
       - name: Documentation
         run: cargo doc --locked --workspace --no-deps
       - name: Release build
