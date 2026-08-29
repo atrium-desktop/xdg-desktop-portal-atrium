@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.26] - 2026-08-29
+
+### Changed
+
+- Promoted the Optics dependency set from `v0.0.28` to `v0.0.29` and
+  adopted its shared typed Flux/Lens/Iris FFI seams. The prompter no longer
+  re-types device or image handles across independently generated bindings.
+- CI now runs unit and integration tests through nextest, retaining a
+  separate documentation-test pass.
+
 ## [0.0.25] - 2026-08-25
 
 ### Changed
@@ -680,7 +690,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.25...HEAD
+[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.26...HEAD
+[0.0.26]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.26
 [0.0.25]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.25
 [0.0.24]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.24
 [0.0.23]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.23
