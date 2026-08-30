@@ -208,19 +208,32 @@ fn choice_row(state: &mut State, f: &mut Frame, index: usize) {
                     if f.button(current_label) {
                         f.place_toggle(&popup_id);
                     }
-                    f.place(&popup_id, &PlaceOpts {
-                        mode: PlaceMode::Anchored,
-                        band: Band::Popup,
-                        ..Default::default()
-                    }, |f| {
-                        f.col().show_flat(|f| {
-                            for (idx, &label) in labels.iter().enumerate() {
-                                if f.selectable(label, idx as i32 == *selected) {
-                                    *selected = idx as i32;
-                                    f.place_close(&popup_id);
+                    let rect = f.response().rect;
+                    let palette = state.appearance.palette();
+                    f.place(
+                        &popup_id,
+                        &PlaceOpts {
+                            mode: PlaceMode::Anchored,
+                            band: Band::Popup,
+                            rect,
+                            transient: true,
+                            ..Default::default()
+                        },
+                        |f| {
+                        f.col()
+                            .bg(palette.surface)
+                            .border(palette.border)
+                            .border_width(1.0)
+                            .radius(metrics::RADIUS)
+                            .pad(4.0)
+                            .show_flat(|f| {
+                                for (idx, &label) in labels.iter().enumerate() {
+                                    if f.selectable(label, idx as i32 == *selected) {
+                                        *selected = idx as i32;
+                                        f.place_close(&popup_id);
+                                    }
                                 }
-                            }
-                        });
+                            });
                     });
                 });
         }
