@@ -9,7 +9,7 @@
 //! snapshot from the request (contract v6).
 
 use aegis_portal_prompter::{ConfirmRequest, ConfirmResponse, PromptAppearance, PromptResult};
-use lens::{Align, Frame, Input, LayoutOpts};
+use lens::{Frame, Input};
 
 use super::sizing;
 use super::style::{self, ThemeInput, metrics};
@@ -54,13 +54,10 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
     }
 
     let width = display_size(input).0 - 2.0 * metrics::SPACE_L;
-    f.column_ex(
-        &LayoutOpts {
-            gap: metrics::SPACE_M,
-            pad: metrics::SPACE_L,
-            ..Default::default()
-        },
-        |f| {
+    f.col()
+        .gap(metrics::SPACE_M)
+        .pad(metrics::SPACE_L)
+        .show_flat(|f| {
             f.push_style(style::title_style());
             f.label(&state.request.title);
             f.pop_style();
@@ -72,13 +69,10 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
             f.flex(1.0);
             f.spacer(0.0);
 
-            f.row_ex(
-                &LayoutOpts {
-                    gap: metrics::SPACE_S,
-                    cross: Align::Center,
-                    ..Default::default()
-                },
-                |f| {
+            f.row()
+                .gap(metrics::SPACE_S)
+                .items_center()
+                .show_flat(|f| {
                     f.flex(1.0);
                     f.spacer(0.0);
 
@@ -109,10 +103,8 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                     if f.button(accept) {
                         finish(state, ConfirmResponse::Confirmed);
                     }
-                },
-            );
-        },
-    );
+                });
+        });
 }
 
 fn finish(state: &mut State, response: ConfirmResponse) {

@@ -97,9 +97,6 @@ pub mod metrics {
     pub const RADIUS: f32 = 8.0;
     /// Compact corner radius for sidebar items.
     pub const RADIUS_SM: f32 = 6.0;
-    /// The radius of in-window material bands (the file chooser's toolbar),
-    /// mirroring `aegis-design`'s `radii.popover` (12).
-    pub const RADIUS_PANEL: f32 = 12.0;
     /// The radius of the file chooser's preview plate, mirroring
     /// `aegis-design`'s `radii.card` (16).
     pub const RADIUS_CARD: f32 = 16.0;
@@ -113,10 +110,7 @@ pub mod metrics {
     pub const FONT_SMALL: f32 = 12.5;
 
     // ---- icons ---------------------------------------------------------
-    /// Row and toolbar glyphs.
-    #[allow(dead_code)]
-    pub const ICON: f32 = 16.0;
-    /// The root breadcrumb's drive glyph.
+    /// The root breadcrumb's drive glyph and toolbar glyphs.
     pub const ICON_SMALL: f32 = 14.0;
 }
 
@@ -145,6 +139,7 @@ pub struct Palette {
     pub material_border: Color,
     /// The scrim behind pinned in-window modals. Mirrors
     /// `aegis-design`'s `scrim`.
+    #[allow(dead_code)]
     pub scrim: Color,
 }
 
@@ -345,24 +340,10 @@ pub fn disabled_button_style_for(palette: &Palette) -> Style {
         .with_fg(palette.text_muted)
 }
 
-/// The translucent material band options for elevated in-window chrome
-/// (the Finder-style toolbar and places rail): a light wash plus a
-/// hairline, rounded like a popover. Drawn with [`band_layout_opts`].
-pub fn band_layout_opts(dark: bool) -> lens::LayoutOpts {
-    let palette = palette(dark);
-    lens::LayoutOpts {
-        bg: palette.material,
-        radius: metrics::RADIUS_PANEL,
-        border: palette.material_border,
-        // A material band takes a hairline, thicker than a control border.
-        border_width: 1.0,
-        ..Default::default()
-    }
-}
-
 /// The scrim color for pinned in-window modals (overwrite confirmation):
 /// dimming the base tree, not transparency, keeps the modal legible over
 /// both schemes.
+#[allow(dead_code)]
 pub fn modal_backdrop(dark: bool) -> Color {
     palette(dark).scrim
 }

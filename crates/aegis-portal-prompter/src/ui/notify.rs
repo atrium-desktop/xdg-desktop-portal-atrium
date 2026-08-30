@@ -30,7 +30,7 @@ use aegis_portal_prompter::notify::{
     CommandFrame, EventFrame, MAX_LIVE_NOTIFICATIONS, Notification, NotifyCommand, NotifyEvent,
     read_line_bounded,
 };
-use lens::{Align, Frame, Input, LayoutOpts};
+use lens::{Frame, Input};
 
 use super::style::{self, metrics};
 use super::{
@@ -291,18 +291,14 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
     }
 
     f.scroll("notifications", |f| {
-        f.column_ex(
-            &LayoutOpts {
-                gap: metrics::SPACE_S,
-                pad: metrics::SPACE_M,
-                ..Default::default()
-            },
-            |f| {
+        f.col()
+            .gap(metrics::SPACE_S)
+            .pad(metrics::SPACE_M)
+            .show_flat(|f| {
                 for index in 0..state.cards.len() {
                     card(state, f, index);
                 }
-            },
-        );
+            });
     });
 }
 
@@ -314,34 +310,30 @@ fn card(state: &mut State, f: &mut Frame, index: usize) {
     let key = format!("{}:{}", notification.app_id, notification.id);
     let palette = state.appearance.palette();
 
-    let body_opts = LayoutOpts {
-        gap: metrics::SPACE_XXS,
-        pad: metrics::SPACE_S,
-        bg: palette.field,
-        radius: metrics::RADIUS,
-        ..Default::default()
-    };
     let width = 420.0 - 2.0 * (metrics::SPACE_M + metrics::SPACE_S);
-    let (response, ()) = f.pressable_row(&format!("card-{key}"), "", &body_opts, |f, _| {
-        f.column_ex(
-            &LayoutOpts {
-                gap: metrics::SPACE_XXS,
-                ..Default::default()
-            },
-            |f| {
-                if !notification.title.is_empty() {
-                    f.push_style(style::title_style());
-                    f.label(&truncate_to_width(f, &notification.title, width));
-                    f.pop_style();
-                }
-                if !notification.body.is_empty() {
-                    f.push_style(style::muted_style_for(&palette));
-                    f.label_wrapped(&notification.body, width.max(120.0));
-                    f.pop_style();
-                }
-            },
-        );
-    });
+    let (response, ()) = f
+        .row()
+        .gap(metrics::SPACE_XXS)
+        .pad(metrics::SPACE_S)
+        .bg(palette.field)
+        .rounded(metrics::RADIUS)
+        .id(&format!("card-{key}"))
+        .show(|f| {
+            f.col()
+                .gap(metrics::SPACE_XXS)
+                .show_flat(|f| {
+                    if !notification.title.is_empty() {
+                        f.push_style(style::title_style());
+                        f.label(&truncate_to_width(f, &notification.title, width));
+                        f.pop_style();
+                    }
+                    if !notification.body.is_empty() {
+                        f.push_style(style::muted_style_for(&palette));
+                        f.label_wrapped(&notification.body, width.max(120.0));
+                        f.pop_style();
+                    }
+                });
+        });
     if response.clicked
         && let Some(action) = notification.default_action.clone()
     {
@@ -354,13 +346,10 @@ fn card(state: &mut State, f: &mut Frame, index: usize) {
         return;
     }
 
-    f.row_ex(
-        &LayoutOpts {
-            gap: metrics::SPACE_S,
-            cross: Align::Center,
-            ..Default::default()
-        },
-        |f| {
+    f.row()
+        .gap(metrics::SPACE_S)
+        .items_center()
+        .show_flat(|f| {
             for button in &notification.buttons {
                 if f.button(&button.label) {
                     state.emit(NotifyEvent::ActionInvoked {
@@ -380,8 +369,7 @@ fn card(state: &mut State, f: &mut Frame, index: usize) {
             if dismiss {
                 state.dismiss(index);
             }
-        },
-    );
+        });
 }
 
 #[cfg(test)]

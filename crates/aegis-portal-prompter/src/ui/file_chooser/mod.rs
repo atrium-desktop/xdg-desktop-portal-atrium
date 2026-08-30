@@ -30,7 +30,7 @@ use aegis_portal_prompter::{
     PromptAppearance, PromptResult,
 };
 use lens::{
-    Align, Color, Frame, Input, LayoutOpts, ModalOpts, TableColumn, TableOpts, TextBuf, key, mods,
+    Band, Color, Frame, Input, PlaceMode, PlaceOpts, TextBuf, key, mods,
 };
 use model::{
     Entry, History, Place, PlaceIcon, PlaceSection, breadcrumbs, common_prefix, expand_tilde,
@@ -734,22 +734,18 @@ fn icon_tool_button_rect(
     if !enabled {
         f.push_style(style::muted_style_for(palette));
     }
-    let (response, ()) = f.pressable_row(
-        id,
-        "",
-        &LayoutOpts {
-            radius: metrics::RADIUS,
-            bg: palette.material,
-            border: palette.material_border,
-            cross: Align::Center,
-            ..Default::default()
-        },
-        |f, _| {
+    let (response, ()) = f
+        .row()
+        .radius(metrics::RADIUS)
+        .bg(palette.material)
+        .border(palette.material_border)
+        .items_center()
+        .id(id)
+        .show(|f| {
             f.centered(metrics::CONTROL_HEIGHT, metrics::CONTROL_HEIGHT, |f| {
                 icon(f);
             });
-        },
-    );
+        });
     if !enabled {
         f.pop_style();
     }
@@ -767,20 +763,16 @@ fn icon_nav_button(
     if !enabled {
         f.push_style(style::muted_style_for(palette));
     }
-    let (response, ()) = f.pressable_row(
-        id,
-        "",
-        &LayoutOpts {
-            radius: metrics::RADIUS_SM,
-            cross: Align::Center,
-            ..Default::default()
-        },
-        |f, _| {
+    let (response, ()) = f
+        .row()
+        .radius(metrics::RADIUS_SM)
+        .items_center()
+        .id(id)
+        .show(|f| {
             f.centered(metrics::CONTROL_HEIGHT, metrics::CONTROL_HEIGHT, |f| {
                 icon(f);
             });
-        },
-    );
+        });
     if !enabled {
         f.pop_style();
     }
@@ -798,24 +790,20 @@ fn button_with_icon(
     if !enabled {
         f.push_style(style::muted_style_for(palette));
     }
-    let (response, ()) = f.pressable_row(
-        id,
-        "",
-        &LayoutOpts {
-            height: metrics::CONTROL_HEIGHT,
-            radius: metrics::RADIUS,
-            bg: palette.material,
-            border: palette.material_border,
-            pad: metrics::SPACE_S,
-            gap: metrics::SPACE_S,
-            cross: Align::Center,
-            ..Default::default()
-        },
-        |f, _| {
+    let (response, ()) = f
+        .row()
+        .height(metrics::CONTROL_HEIGHT)
+        .radius(metrics::RADIUS)
+        .bg(palette.material)
+        .border(palette.material_border)
+        .pad(metrics::SPACE_S)
+        .gap(metrics::SPACE_S)
+        .items_center()
+        .id(id)
+        .show(|f| {
             icon(f);
             f.label(label);
-        },
-    );
+        });
     if !enabled {
         f.pop_style();
     }
@@ -824,9 +812,9 @@ fn button_with_icon(
 
 /// Whether a transient dropdown popup or context menu is open (it swallows Escape).
 fn popup_open(state: &State, f: &mut Frame) -> bool {
-    let filter_open = f.place_is_open(&format!("{FILTER_DROPDOWN}##ov"));
-    let place_ctx_open = f.place_is_open("place-context") || f.place_is_open("place-context##ov");
-    let more_menu_open = f.place_is_open("more-menu") || f.place_is_open("more-menu##ov");
+    let filter_open = f.place_is_open(FILTER_DROPDOWN);
+    let place_ctx_open = f.place_is_open("place-context");
+    let more_menu_open = f.place_is_open("more-menu");
     filter_open
         || place_ctx_open
         || more_menu_open
@@ -834,7 +822,7 @@ fn popup_open(state: &State, f: &mut Frame) -> bool {
             .request
             .choices
             .iter()
-            .any(|choice| f.place_is_open(&format!("choice-{}##ov", choice.id)))
+            .any(|choice| f.place_is_open(&format!("choice-{}", choice.id)))
 }
 
 /// All keyboard processing for the dialog, run before rendering so the
@@ -847,7 +835,7 @@ fn handle_keys(state: &mut State, f: &mut Frame, input: &Input) {
     if escape_pressed(input) {
         if state.confirm_overwrite.is_some() {
             // The overwrite modal owns the first Escape.
-            f.modal_close(OVERWRITE_MODAL);
+            f.place_close(OVERWRITE_MODAL);
             state.confirm_overwrite = None;
         } else if !popup {
             if state.location_editing {
@@ -873,7 +861,7 @@ fn handle_keys(state: &mut State, f: &mut Frame, input: &Input) {
         // The overwrite modal owns the remaining keys; Return confirms the
         // replacement (its default action), mirroring GTK.
         if key_pressed(input, key::RETURN) {
-            f.modal_close(OVERWRITE_MODAL);
+            f.place_close(OVERWRITE_MODAL);
             state.confirm_overwrite = None;
             accept_checked(state, true);
         }
@@ -903,14 +891,57 @@ fn handle_keys(state: &mut State, f: &mut Frame, input: &Input) {
         }
         return;
     }
+    if key_pressed(input, key::UP) {
+        let prev = match state.focus_index {
+            Some(i) if i > 0 => i - 1,
+            Some(_) => 0,
+            None => 0,
+        };
+        if !state.entries.is_empty() {
+            focus_to(state, prev);
+        }
+        return;
+    }
+    if key_pressed(input, key::DOWN) {
+        let next = match state.focus_index {
+            Some(i) if i + 1 < state.entries.len() => i + 1,
+            Some(i) => i,
+            None => 0,
+        };
+        if !state.entries.is_empty() {
+            focus_to(state, next);
+        }
+        return;
+    }
+    if key_pressed(input, key::HOME) {
+        if !state.entries.is_empty() {
+            focus_to(state, 0);
+        }
+        return;
+    }
+    if key_pressed(input, key::END) {
+        if !state.entries.is_empty() {
+            focus_to(state, state.entries.len() - 1);
+        }
+        return;
+    }
     if key_pressed(input, key::RETURN) {
-        // The listing table owns Return on a cursor row (it reports
-        // `activated`); with no cursor row, Enter accepts the dialog when
-        // the current state is valid.
-        if state.focus_index.is_none() && accept_valid(state) {
+        if let Some(index) = state.focus_index
+            && let Some(entry) = state.entries.get(index).cloned()
+        {
+            activate_entry(state, &entry);
+            return;
+        }
+        if accept_valid(state) {
             accept(state);
         }
         return;
+    }
+    if key_pressed(input, key::BACKSPACE) {
+        if let Some(parent) = state.dir.parent().map(Path::to_path_buf) {
+            state.navigate(parent);
+            return;
+        }
     }
     if command_held(input) && key_pressed(input, ' ' as i32) && state.multiple_allowed() {
         toggle_focused(state);
@@ -963,40 +994,27 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
         return;
     }
 
-    f.column_ex(
-        &LayoutOpts {
-            gap: metrics::SPACE_S,
-            pad: metrics::SPACE_M,
-            // Fill the window so the flexible listing row absorbs both the
-            // slack and the deficit; an intrinsic-sized root column would
-            // push the footer below the window's bottom edge on short
-            // windows or long places/list content.
-            flex: 1.0,
-            ..Default::default()
-        },
-        |f| {
+    f.col()
+        .gap(metrics::SPACE_S)
+        .pad(metrics::SPACE_M)
+        .flex(1.0)
+        .show_flat(|f| {
             // ---- location toolbar --------------------------------------
-            f.row_ex(
-                &LayoutOpts {
-                    gap: metrics::SPACE_M,
-                    height: metrics::FIELD_HEIGHT,
-                    cross: Align::Center,
-                    ..Default::default()
-                },
-                |f| {
+            f.row()
+                .gap(metrics::SPACE_M)
+                .height(metrics::FIELD_HEIGHT)
+                .items_center()
+                .show_flat(|f| {
                     // Navigation controls group [ ←  →  ↑ ]
-                    f.row_ex(
-                        &LayoutOpts {
-                            height: metrics::CONTROL_HEIGHT,
-                            radius: metrics::RADIUS,
-                            bg: palette.material,
-                            border: palette.material_border,
-                            pad: 2.0,
-                            gap: 1.0,
-                            cross: Align::Center,
-                            ..Default::default()
-                        },
-                        |f| {
+                    f.row()
+                        .height(metrics::CONTROL_HEIGHT)
+                        .rounded(metrics::RADIUS)
+                        .bg(palette.material)
+                        .border(palette.material_border)
+                        .pad(2.0)
+                        .gap(1.0)
+                        .items_center()
+                        .show_flat(|f| {
                             let current_dir = state.dir.clone();
                             if icon_nav_button(
                                 f,
@@ -1028,34 +1046,30 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                             {
                                 state.navigate(parent);
                             }
-                        },
-                    );
+                        });
 
                     // Center path / breadcrumb container
-                    f.row_ex(
-                        &LayoutOpts {
-                            flex: if state.location_editing { 1.0 } else { 0.0 },
-                            height: metrics::CONTROL_HEIGHT,
-                            radius: metrics::RADIUS,
-                            bg: palette.material,
-                            border: palette.material_border,
-                            pad: metrics::SPACE_XS,
-                            gap: metrics::SPACE_S,
-                            cross: Align::Center,
-                            ..Default::default()
-                        },
-                        |f| {
+                    f.row()
+                        .flex(if state.location_editing { 1.0 } else { 0.0 })
+                        .height(metrics::CONTROL_HEIGHT)
+                        .rounded(metrics::RADIUS)
+                        .bg(palette.material)
+                        .border(palette.material_border)
+                        .pad(metrics::SPACE_XS)
+                        .gap(metrics::SPACE_S)
+                        .items_center()
+                        .show_flat(|f| {
                             if state.location_editing {
                                 f.flex(1.0);
-                                if state.location_caret_end {
-                                    f.textfield_set_caret("location-path", u32::MAX);
-                                    state.location_caret_end = false;
-                                }
                                 f.textfield_placeholder(
                                     "location-path",
                                     &mut state.location,
                                     "Type a path…",
                                 );
+                                if state.location_caret_end {
+                                    f.textfield_set_caret("location-path", u32::MAX);
+                                    state.location_caret_end = false;
+                                }
                                 let response = f.response();
                                 state.location_field_focused = response.focused;
                                 if !response.focused {
@@ -1067,8 +1081,7 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                             } else {
                                 breadcrumb(state, f);
                             }
-                        },
-                    );
+                        });
 
                     if !state.location_editing {
                         f.flex(1.0);
@@ -1090,7 +1103,7 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                         state.folder_name.set("");
                     }
 
-                    let (more_clicked, more_rect) = icon_tool_button_rect(
+                    let (more_clicked, _) = icon_tool_button_rect(
                         f,
                         "more-menu-btn",
                         &palette,
@@ -1098,7 +1111,7 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                         |f| more_icon(f, metrics::ICON_SMALL),
                     );
                     if more_clicked {
-                        f.context_menu_open("more-menu", more_rect);
+                        f.place_toggle("more-menu");
                     }
                 },
             );
@@ -1112,13 +1125,10 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
 
             // ---- new folder ---------------------------------------------
             if state.creating_folder {
-                f.row_ex(
-                    &LayoutOpts {
-                        gap: metrics::SPACE_S,
-                        cross: Align::Center,
-                        ..Default::default()
-                    },
-                    |f| {
+                f.row()
+                    .gap(metrics::SPACE_S)
+                    .items_center()
+                    .show_flat(|f| {
                         f.label("Folder name:");
                         f.size_next(260.0, metrics::FIELD_HEIGHT);
                         f.textfield_placeholder(
@@ -1139,8 +1149,7 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                         if f.button("Create") {
                             create_folder(state);
                         }
-                    },
-                );
+                    });
                 if let Some(error) = state.folder_error.clone() {
                     f.push_style(style::error_style_for(&palette));
                     f.label_sized(&error, metrics::FONT_SMALL);
@@ -1150,20 +1159,17 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
 
             // ---- save name (SaveFile only) ------------------------------
             if state.request.mode == FileChooserMode::SaveFile {
-                f.row_ex(
-                    &LayoutOpts {
-                        gap: metrics::SPACE_S,
-                        cross: Align::Center,
-                        ..Default::default()
-                    },
-                    |f| {
+                f.row()
+                    .gap(metrics::SPACE_S)
+                    .items_center()
+                    .show_flat(|f| {
                         f.label("Name:");
                         f.flex(1.0);
+                        f.textfield_placeholder("save-name", &mut state.name, "File name");
                         if state.name_caret_end {
                             f.textfield_set_caret("save-name", u32::MAX);
                             state.name_caret_end = false;
                         }
-                        f.textfield_placeholder("save-name", &mut state.name, "File name");
                         let response = f.response();
                         state.name_field_focused = response.focused;
                         if state.name_focus_pending {
@@ -1173,24 +1179,16 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                         if response.clicked && accept_valid(state) {
                             accept(state);
                         }
-                    },
-                );
+                    });
             }
 
             // ---- places sidebar + directory listing + preview pane ------
-            f.row_ex(
-                &LayoutOpts {
-                    gap: metrics::SPACE_S,
-                    flex: 1.0,
-                    ..Default::default()
-                },
-                |f| {
+            f.row()
+                .gap(metrics::SPACE_S)
+                .flex(1.0)
+                .show_flat(|f| {
                     // The places rail: clean, flat, and compact, separated from the browsing column by a hairline.
-                    let sidebar_opts = LayoutOpts {
-                        width: 155.0,
-                        ..Default::default()
-                    };
-                    f.column_ex(&sidebar_opts, |f| {
+                    f.col().width(155.0).show_flat(|f| {
                         let standard_places: Vec<(usize, Place)> = state
                             .places
                             .iter()
@@ -1213,39 +1211,28 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
 
                         f.scroll("chooser-places", |f| {
                             let content_w = 155.0 - 8.0;
-                            f.column_ex(
-                                &LayoutOpts {
-                                    width: content_w,
-                                    gap: 1.0,
-                                    pad: 0.0,
-                                    ..Default::default()
-                                },
-                                |f| {
-                                    for (index, place) in &standard_places {
+                            f.col().width(content_w).gap(1.0).show_flat(|f| {
+                                for (index, place) in &standard_places {
+                                    place_row(state, f, *index, place);
+                                }
+
+                                if !pinned_places.is_empty() || state.drag_active {
+                                    f.spacer(metrics::SPACE_XS);
+                                    sidebar_section_header(f, "PINNED", &palette);
+                                    for (index, place) in &pinned_places {
                                         place_row(state, f, *index, place);
                                     }
-
-                                    if !pinned_places.is_empty() || state.drag_active {
-                                        f.spacer(metrics::SPACE_XS);
-                                        sidebar_section_header(f, "PINNED", &palette);
-                                        for (index, place) in &pinned_places {
-                                            place_row(state, f, *index, place);
-                                        }
-                                        if state.drag_active {
-                                            drop_indicator(f, &palette);
-                                        }
+                                    if state.drag_active {
+                                        drop_indicator(f, &palette);
                                     }
-                                },
-                            );
+                                }
+                            });
                         });
                     });
-                    f.column_ex(
-                        &LayoutOpts {
-                            flex: 1.0,
-                            gap: metrics::SPACE_XS,
-                            ..Default::default()
-                        },
-                        |f| {
+                    f.col()
+                        .flex(1.0)
+                        .gap(metrics::SPACE_XS)
+                        .show_flat(|f| {
                             if let Some(error) = state.listing_error.clone() {
                                 f.push_style(style::error_style_for(&palette));
                                 f.label_sized(&error, metrics::FONT_SMALL);
@@ -1257,14 +1244,11 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                                 f.pop_style();
                             }
                             // Clean table header matching design
-                            f.row_ex(
-                                &LayoutOpts {
-                                    height: 24.0,
-                                    cross: Align::Center,
-                                    pad: metrics::SPACE_XS,
-                                    ..Default::default()
-                                },
-                                |f| {
+                            f.row()
+                                .height(24.0)
+                                .items_center()
+                                .pad(metrics::SPACE_XS)
+                                .show_flat(|f| {
                                     f.push_style(style::small_muted_style_for(&palette));
                                     f.flex(1.0);
                                     f.label("Name ▾");
@@ -1273,8 +1257,7 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                                     f.size_next(160.0, 20.0);
                                     f.label("Modified");
                                     f.pop_style();
-                                },
-                            );
+                                });
                             f.flex(1.0);
                             // The table's id derives from the directory, so
                             // its retained scroll position is
@@ -1284,80 +1267,37 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                                 focus_widget(f, &table_id);
                                 state.table_focus_pending = false;
                             }
-                            let mut cursor = state.focus_index.map_or(-1, |index| index as i32);
                             let entries = &state.entries;
                             let selected = &state.selected;
-                            let columns = [
-                                TableColumn {
-                                    title: "Name",
-                                    width: 0.0,
-                                    align: Align::Start,
-                                },
-                                TableColumn {
-                                    title: "Size",
-                                    width: 100.0,
-                                    align: Align::Start,
-                                },
-                                TableColumn {
-                                    title: "Modified",
-                                    width: 160.0,
-                                    align: Align::Start,
-                                },
-                            ];
-                            let result = f.table_ex(
-                                &table_id,
-                                &columns,
-                                entries.len(),
-                                TableOpts {
-                                    row_height: metrics::ROW_HEIGHT,
-                                    show_header: false,
-                                    selectable: true,
-                                    zebra: false,
-                                    keyboard: true,
-                                },
-                                |row, col| match col {
-                                    0 => entries[row].name.clone(),
-                                    1 => entries[row].size_display(),
-                                    2 => entries[row].modified_display(),
-                                    _ => String::new(),
-                                },
-                                |row, col| {
-                                    if col == 0 {
-                                        Some(if entries[row].is_dir {
+                            let mut clicked_idx = None;
+                            f.scroll(&table_id, |f| {
+                                f.col().gap(1.0).show_flat(|f| {
+                                    for (idx, entry) in entries.iter().enumerate() {
+                                        let is_selected = selected.contains(&entry.path);
+                                        let icon = if entry.is_dir {
                                             lens::sys::lens_icon_id::LENS_ICON_FOLDER
                                         } else {
                                             lens::sys::lens_icon_id::LENS_ICON_FILE
-                                        })
-                                    } else {
-                                        None
+                                        };
+                                        f.row()
+                                            .height(metrics::ROW_HEIGHT)
+                                            .items_center()
+                                            .show_flat(|f| {
+                                                if f.selectable_icon(&entry.name, icon, is_selected) {
+                                                    clicked_idx = Some(idx);
+                                                }
+                                                f.spacer(metrics::SPACE_S);
+                                                f.push_style(style::muted_style_for(&palette));
+                                                f.label_sized(&entry.size_display(), metrics::FONT_SMALL);
+                                                f.spacer(metrics::SPACE_S);
+                                                f.label_sized(&entry.modified_display(), metrics::FONT_SMALL);
+                                                f.pop_style();
+                                            });
                                     }
-                                },
-                                |row| selected.contains(&entries[row].path),
-                                &mut cursor,
-                            );
-                            // The table moved the cursor (arrows/Home/End,
-                            // or a clamp after the model shrank): selection
-                            // follows, matching GTK.
-                            let moved_to = (cursor >= 0).then_some(cursor as usize);
-                            if result.cursor_changed && moved_to != state.focus_index {
-                                if let Some(index) = moved_to {
-                                    focus_to(state, index);
-                                } else {
-                                    state.focus_index = None;
-                                }
-                            } else {
-                                state.focus_index = moved_to;
-                            }
-                            if let Some(row) = result.clicked_row {
-                                handle_click(state, row);
-                            }
-                            if result.activated
-                                && let Some(entry) = state
-                                    .focus_index
-                                    .and_then(|index| state.entries.get(index))
-                                    .cloned()
-                            {
-                                activate_entry(state, &entry);
+                                });
+                            });
+                            if let Some(idx) = clicked_idx {
+                                handle_click(state, idx);
                             }
                             if !state.typeahead.0.is_empty() {
                                 f.push_style(style::small_muted_style_for(&palette));
@@ -1367,13 +1307,11 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                                 );
                                 f.pop_style();
                             }
-                        },
-                    );
+                        });
                     // The preview pane (ADR-0017): the file under the
                     // listing cursor, when its format decodes cheaply.
                     preview_pane(state, f, input);
-                },
-            );
+                });
 
             if state.request.mode == FileChooserMode::SaveFiles {
                 f.push_style(style::small_muted_style_for(&palette));
@@ -1390,13 +1328,10 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
             }
 
             // ---- footer: filter + buttons --------------------------------
-            f.row_ex(
-                &LayoutOpts {
-                    gap: metrics::SPACE_S,
-                    cross: Align::Center,
-                    ..Default::default()
-                },
-                |f| {
+            f.row()
+                .gap(metrics::SPACE_S)
+                .items_center()
+                .show_flat(|f| {
                     if !state.filters.is_empty() {
                         let mut labels: Vec<&str> = state
                             .filters
@@ -1404,10 +1339,33 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                             .map(|filter| filter.label.as_str())
                             .collect();
                         labels.truncate(16);
-                        if f.dropdown(FILTER_DROPDOWN, &mut state.filter_index, &labels) {
-                            state.focus_index = None;
-                            state.reload = true;
+                        let current_label = labels
+                            .get(state.filter_index.max(0) as usize)
+                            .copied()
+                            .unwrap_or("All files");
+                        if f.button(current_label) {
+                            f.place_toggle(FILTER_DROPDOWN);
                         }
+                        f.place(
+                            FILTER_DROPDOWN,
+                            &PlaceOpts {
+                                mode: PlaceMode::Anchored,
+                                band: Band::Popup,
+                                ..Default::default()
+                            },
+                            |f| {
+                                f.col().show_flat(|f| {
+                                    for (idx, &label) in labels.iter().enumerate() {
+                                        if f.selectable(label, idx as i32 == state.filter_index) {
+                                            state.filter_index = idx as i32;
+                                            state.focus_index = None;
+                                            state.reload = true;
+                                            f.place_close(FILTER_DROPDOWN);
+                                        }
+                                    }
+                                });
+                            },
+                        );
                     }
 
                     f.flex(1.0);
@@ -1439,55 +1397,55 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                         f.button(label);
                         f.pop_style();
                     }
-                },
-            );
-        },
-    );
+                });
+        });
 
     // ---- overwrite confirmation ----------------------------------------
-    let was_open = f.modal_is_open(OVERWRITE_MODAL);
+    let was_open = f.place_is_open(OVERWRITE_MODAL);
     if state.confirm_overwrite.is_some() && !was_open && !state.confirm_open {
         // Dismissed without an answer (click outside).
         state.confirm_overwrite = None;
     }
     if state.confirm_open {
-        f.modal_open(OVERWRITE_MODAL);
+        f.place_open(OVERWRITE_MODAL);
         state.confirm_open = false;
     }
-    if state.confirm_overwrite.is_some() && f.modal_is_open(OVERWRITE_MODAL) {
+    if state.confirm_overwrite.is_some() && f.place_is_open(OVERWRITE_MODAL) {
         let target_name = state
             .confirm_overwrite
             .as_ref()
             .and_then(|target| target.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        f.modal(
+        f.place(
             OVERWRITE_MODAL,
-            &ModalOpts {
-                title: Some("Replace File?"),
-                backdrop: style::modal_backdrop(state.appearance.dark()),
-                min_width: 340.0,
+            &PlaceOpts {
+                mode: PlaceMode::Centered,
+                band: Band::Modal,
                 ..Default::default()
             },
             |f| {
-                f.column_ex(
-                    &LayoutOpts {
-                        gap: metrics::SPACE_M,
-                        pad: metrics::SPACE_S,
-                        ..Default::default()
-                    },
-                    |f| {
+                f.col()
+                    .gap(metrics::SPACE_M)
+                    .pad(metrics::SPACE_L)
+                    .bg(palette.surface)
+                    .border(palette.border)
+                    .border_width(1.0)
+                    .radius(metrics::RADIUS)
+                    .min_width(340.0)
+                    .show_flat(|f| {
+                        f.push_style(style::title_style());
+                        f.label("Replace File?");
+                        f.pop_style();
+
                         f.label(&format!(
                             "A file named \"{target_name}\" already exists. \
                              Do you want to replace it?"
                         ));
-                        f.row_ex(
-                            &LayoutOpts {
-                                gap: metrics::SPACE_S,
-                                cross: Align::Center,
-                                ..Default::default()
-                            },
-                            |f| {
+                        f.row()
+                            .gap(metrics::SPACE_S)
+                            .items_center()
+                            .show_flat(|f| {
                                 f.flex(1.0);
                                 f.spacer(0.0);
                                 f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
@@ -1495,66 +1453,104 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                                 let cancel = f.button("Cancel");
                                 f.pop_style();
                                 if cancel {
-                                    f.modal_close(OVERWRITE_MODAL);
+                                    f.place_close(OVERWRITE_MODAL);
                                     state.confirm_overwrite = None;
                                 }
                                 f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
                                 if f.button("Replace") {
-                                    f.modal_close(OVERWRITE_MODAL);
+                                    f.place_close(OVERWRITE_MODAL);
                                     state.confirm_overwrite = None;
                                     accept_checked(state, true);
                                 }
-                            },
-                        );
-                    },
-                );
+                            });
+                    });
             },
         );
     }
 
     // ---- context menu for places ---------------------------------------
-    f.context_menu("place-context", |f| {
-        if let Some(target) = state.context_place.clone() {
-            if f.menu_item("Open", "") {
-                state.navigate(target.path.clone());
-            }
-            if f.menu_item("Copy Path", "") {
-                f.copy(&target.path.to_string_lossy());
-            }
-            if target.custom {
-                f.menu_separator();
-                if f.menu_item("Remove from Bookmarks", "") {
-                    state.unpin_path(&target.path);
-                }
-            }
-        }
-    });
+    f.place(
+        "place-context",
+        &PlaceOpts {
+            mode: PlaceMode::Anchored,
+            band: Band::Popup,
+            ..Default::default()
+        },
+        |f| {
+            f.col()
+                .gap(2.0)
+                .pad(4.0)
+                .bg(palette.surface)
+                .border(palette.border)
+                .border_width(1.0)
+                .radius(metrics::RADIUS)
+                .show_flat(|f| {
+                    if let Some(target) = state.context_place.clone() {
+                        if f.selectable("Open", false) {
+                            state.navigate(target.path.clone());
+                            f.place_close("place-context");
+                        }
+                        if f.selectable("Copy Path", false) {
+                            f.copy(&target.path.to_string_lossy());
+                            f.place_close("place-context");
+                        }
+                        if target.custom {
+                            f.separator();
+                            if f.selectable("Remove from Bookmarks", false) {
+                                state.unpin_path(&target.path);
+                                f.place_close("place-context");
+                            }
+                        }
+                    }
+                });
+        },
+    );
 
     // ---- context menu for more options ---------------------------------
-    f.context_menu("more-menu", |f| {
-        if f.menu_item_checked("Show Hidden Files", "Ctrl+H", state.show_hidden) {
-            state.show_hidden = !state.show_hidden;
-            state.reload = true;
-        }
-        if f.menu_item("Type Path", "Ctrl+L") {
-            start_location_edit(state);
-        }
-        if f.menu_item("Reload", "Ctrl+R") {
-            state.reload = true;
-        }
-        f.menu_separator();
-        let current_dir = state.dir.clone();
-        let is_pinned = state.places.iter().any(|p| p.path == current_dir);
-        if is_pinned {
-            if f.menu_item("Remove from Places", "") {
-                state.unpin_path(&current_dir);
-            }
-        } else {
-            if f.menu_item("Add to Places", "") {
-                state.pin_path(current_dir, None);
-            }
-        }
-    });
+    f.place(
+        "more-menu",
+        &PlaceOpts {
+            mode: PlaceMode::Anchored,
+            band: Band::Popup,
+            ..Default::default()
+        },
+        |f| {
+            f.col()
+                .gap(2.0)
+                .pad(4.0)
+                .bg(palette.surface)
+                .border(palette.border)
+                .border_width(1.0)
+                .radius(metrics::RADIUS)
+                .show_flat(|f| {
+                    if f.selectable("Show Hidden Files", state.show_hidden) {
+                        state.show_hidden = !state.show_hidden;
+                        state.reload = true;
+                        f.place_close("more-menu");
+                    }
+                    if f.selectable("Type Path", false) {
+                        start_location_edit(state);
+                        f.place_close("more-menu");
+                    }
+                    if f.selectable("Reload", false) {
+                        state.reload = true;
+                        f.place_close("more-menu");
+                    }
+                    f.separator();
+                    let current_dir = state.dir.clone();
+                    let is_pinned = state.places.iter().any(|p| p.path == current_dir);
+                    if is_pinned {
+                        if f.selectable("Remove from Places", false) {
+                            state.unpin_path(&current_dir);
+                            f.place_close("more-menu");
+                        }
+                    } else if f.selectable("Add to Places", false) {
+                        state.pin_path(current_dir, None);
+                        f.place_close("more-menu");
+                    }
+                });
+        },
+    );
 
     // Backspace walks up one folder when no text field owns the key.
     if key_pressed(input, key::BACKSPACE)
@@ -1626,30 +1622,31 @@ fn crumb_button(
 ) {
     let is_root = component.parent().is_none();
     let palette = state.appearance.palette();
-    let opts = LayoutOpts {
-        gap: metrics::SPACE_XS,
-        pad: metrics::SPACE_XS,
-        min_height: metrics::CRUMB_HEIGHT,
-        cross: Align::Center,
-        bg: if current {
-            active_bg
-        } else {
-            Color::TRANSPARENT
-        },
-        radius: metrics::RADIUS_SM,
-        ..Default::default()
-    };
     let name = truncate_to_width(f, &crumb_name(component), metrics::CRUMB_MAX_W);
     if !current {
         f.push_style(style::muted_style_for(&palette));
     }
-    let (response, ()) = f.pressable_row(&format!("crumb-{position}"), "", &opts, |f, _| {
-        if is_root {
-            f.label("/");
+    let crumb_id = format!("crumb-{position}");
+    let (response, ()) = f
+        .row()
+        .gap(metrics::SPACE_XS)
+        .pad(metrics::SPACE_XS)
+        .min_height(metrics::CRUMB_HEIGHT)
+        .items_center()
+        .bg(if current {
+            active_bg
         } else {
-            f.label(&name);
-        }
-    });
+            Color::TRANSPARENT
+        })
+        .rounded(metrics::RADIUS_SM)
+        .id(&crumb_id)
+        .show(|f| {
+            if is_root {
+                f.label("/");
+            } else {
+                f.label(&name);
+            }
+        });
     if !current {
         f.pop_style();
     }
@@ -1697,44 +1694,44 @@ fn preview_pane(state: &mut State, f: &mut Frame, input: &Input) {
             f.separator();
             // The preview renders as a card (Finder's preview plate): the
             // material wash and card radius lift it off the listing plane.
-            let mut card = style::band_layout_opts(state.appearance.dark());
-            card.radius = metrics::RADIUS_CARD;
-            card.width = metrics::PREVIEW_WIDTH;
-            card.gap = metrics::SPACE_S;
-            card.pad = metrics::SPACE_XS;
-            f.column_ex(&card, |f| match pane {
-                PreviewState::Ready {
-                    texture,
-                    source_size,
-                    file_bytes,
-                } => {
-                    // The image box flexes to fill the pane's height;
-                    // the caption row below keeps its intrinsic size.
-                    f.flex(1.0);
-                    f.scroll("chooser-preview-image", |f| {
-                        let (w, h) = preview_image_box();
-                        draw_texture_centered(f, &texture, w, h);
-                    });
-                    preview_caption(
-                        f,
-                        &palette,
-                        entry_name.as_deref(),
-                        Some((source_size, file_bytes)),
-                    );
-                }
-                PreviewState::Loading => {
-                    f.push_style(style::small_muted_style_for(&palette));
-                    f.label_sized("Decoding preview…", metrics::FONT_SMALL);
-                    f.pop_style();
-                }
-                PreviewState::Failed { reason } => {
-                    f.push_style(style::small_muted_style_for(&palette));
-                    f.label_wrapped_sized(&reason, metrics::FONT_SMALL, metrics::PREVIEW_WIDTH);
-                    f.pop_style();
-                    preview_caption(f, &palette, entry_name.as_deref(), None);
-                }
-                PreviewState::Hidden => {}
-            });
+            f.col()
+                .radius(metrics::RADIUS_CARD)
+                .width(metrics::PREVIEW_WIDTH)
+                .gap(metrics::SPACE_S)
+                .pad(metrics::SPACE_XS)
+                .show_flat(|f| match pane {
+                    PreviewState::Ready {
+                        texture,
+                        source_size,
+                        file_bytes,
+                    } => {
+                        // The image box flexes to fill the pane's height;
+                        // the caption row below keeps its intrinsic size.
+                        f.flex(1.0);
+                        f.scroll("chooser-preview-image", |f| {
+                            let (w, h) = preview_image_box();
+                            draw_texture_centered(f, &texture, w, h);
+                        });
+                        preview_caption(
+                            f,
+                            &palette,
+                            entry_name.as_deref(),
+                            Some((source_size, file_bytes)),
+                        );
+                    }
+                    PreviewState::Loading => {
+                        f.push_style(style::small_muted_style_for(&palette));
+                        f.label_sized("Decoding preview…", metrics::FONT_SMALL);
+                        f.pop_style();
+                    }
+                    PreviewState::Failed { reason } => {
+                        f.push_style(style::small_muted_style_for(&palette));
+                        f.label_wrapped_sized(&reason, metrics::FONT_SMALL, metrics::PREVIEW_WIDTH);
+                        f.pop_style();
+                        preview_caption(f, &palette, entry_name.as_deref(), None);
+                    }
+                    PreviewState::Hidden => {}
+                });
         }
     }
 }
@@ -1782,40 +1779,34 @@ fn preview_caption(
 
 fn sidebar_section_header(f: &mut Frame, title: &str, palette: &style::Palette) {
     f.push_style(style::small_muted_style_for(palette));
-    f.row_ex(
-        &LayoutOpts {
-            height: metrics::SIDEBAR_HEADER_HEIGHT,
-            cross: Align::Center,
-            pad: 2.0,
-            ..Default::default()
-        },
-        |f| {
+    f.row()
+        .height(metrics::SIDEBAR_HEADER_HEIGHT)
+        .items_center()
+        .pad(2.0)
+        .show_flat(|f| {
             f.label_sized(title, 11.0);
-        },
-    );
+        });
     f.pop_style();
 }
 
 fn drop_indicator(f: &mut Frame, palette: &style::Palette) {
-    let opts = LayoutOpts {
-        gap: metrics::SPACE_S,
-        pad: metrics::SPACE_XS,
-        min_height: metrics::SIDEBAR_ROW_HEIGHT,
-        cross: Align::Center,
-        bg: palette.hover,
-        radius: metrics::RADIUS_SM,
-        ..Default::default()
-    };
-    f.row_ex(&opts, |f| {
-        raw_icon(
-            f,
-            lens::sys::lens_icon_id::LENS_ICON_FOLDER_PLUS,
-            metrics::ICON_SMALL,
-        );
-        f.push_style(style::small_muted_style_for(palette));
-        f.label_sized("Drop to Pin", metrics::FONT_SMALL);
-        f.pop_style();
-    });
+    f.row()
+        .gap(metrics::SPACE_S)
+        .pad(metrics::SPACE_XS)
+        .min_height(metrics::SIDEBAR_ROW_HEIGHT)
+        .items_center()
+        .bg(palette.hover)
+        .rounded(metrics::RADIUS_SM)
+        .show_flat(|f| {
+            raw_icon(
+                f,
+                lens::sys::lens_icon_id::LENS_ICON_FOLDER_PLUS,
+                metrics::ICON_SMALL,
+            );
+            f.push_style(style::small_muted_style_for(palette));
+            f.label_sized("Drop to Pin", metrics::FONT_SMALL);
+            f.pop_style();
+        });
 }
 
 fn place_label(place: &Place) -> &str {
@@ -1840,27 +1831,27 @@ fn place_label(place: &Place) -> &str {
 fn place_row(state: &mut State, f: &mut Frame, index: usize, place: &Place) {
     let active = state.dir == place.path;
     let palette = state.appearance.palette();
-    let opts = LayoutOpts {
-        gap: metrics::SPACE_S,
-        pad: metrics::SPACE_XS,
-        min_height: metrics::SIDEBAR_ROW_HEIGHT,
-        cross: Align::Center,
-        bg: if active {
-            Color::rgba(35, 60, 110, 160)
-        } else {
-            Color::TRANSPARENT
-        },
-        radius: metrics::RADIUS_SM,
-        ..Default::default()
-    };
     if !active {
         f.push_style(style::muted_style_for(&palette));
     }
     let label = place_label(place);
-    let (response, ()) = f.pressable_row(&format!("place-{index}"), "", &opts, |f, _| {
-        place_icon(f, place.icon);
-        f.label(label);
-    });
+    let (response, ()) = f
+        .row()
+        .gap(metrics::SPACE_S)
+        .pad(metrics::SPACE_XS)
+        .min_height(metrics::SIDEBAR_ROW_HEIGHT)
+        .items_center()
+        .bg(if active {
+            Color::rgba(35, 60, 110, 160)
+        } else {
+            Color::TRANSPARENT
+        })
+        .rounded(metrics::RADIUS_SM)
+        .id(&format!("place-{index}"))
+        .show(|f| {
+            place_icon(f, place.icon);
+            f.label(label);
+        });
     if !active {
         f.pop_style();
     }
@@ -1869,7 +1860,7 @@ fn place_row(state: &mut State, f: &mut Frame, index: usize, place: &Place) {
         state.drag_active = false;
     }
     if response.right_clicked {
-        f.context_menu_open("place-context", response.rect);
+        f.place_open("place-context");
         state.context_place = Some(place.clone());
     }
     if response.clicked && !active {
@@ -1964,22 +1955,40 @@ fn choice_row(state: &mut State, f: &mut Frame, index: usize) {
             f.checkbox(&choice.label, value);
         }
         ChoiceState::Options(selected) => {
-            f.row_ex(
-                &LayoutOpts {
-                    gap: metrics::SPACE_S,
-                    cross: Align::Center,
-                    ..Default::default()
-                },
-                |f| {
+            let popup_id = format!("choice-{}", choice.id);
+            f.row()
+                .gap(metrics::SPACE_S)
+                .items_center()
+                .show_flat(|f| {
                     f.label(&choice.label);
                     let labels: Vec<&str> = choice
                         .options
                         .iter()
                         .map(|(_, label)| label.as_str())
                         .collect();
-                    f.dropdown(&format!("choice-{}", choice.id), selected, &labels);
-                },
-            );
+                    let current_label = labels.get((*selected).max(0) as usize).copied().unwrap_or("");
+                    if f.button(current_label) {
+                        f.place_toggle(&popup_id);
+                    }
+                    f.place(
+                        &popup_id,
+                        &PlaceOpts {
+                            mode: PlaceMode::Anchored,
+                            band: Band::Popup,
+                            ..Default::default()
+                        },
+                        |f| {
+                            f.col().show_flat(|f| {
+                                for (idx, &label) in labels.iter().enumerate() {
+                                    if f.selectable(label, idx as i32 == *selected) {
+                                        *selected = idx as i32;
+                                        f.place_close(&popup_id);
+                                    }
+                                }
+                            });
+                        },
+                    );
+                });
         }
     }
 }

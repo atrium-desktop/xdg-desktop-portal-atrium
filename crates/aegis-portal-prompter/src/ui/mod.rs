@@ -358,7 +358,7 @@ pub fn draw_texture_centered(frame: &mut Frame, texture: &TextureHandle, width: 
         // past this frame's render; w/h are positive finite dimensions.
         // The seam shares the bindgen view of `flux_image`, so the
         // pointer lens takes is the very one flux created.
-        unsafe { lens::sys::lens_image(f.as_raw(), texture.raw, w, h) };
+        unsafe { f.image(texture.raw, w, h) };
     });
 }
 
@@ -533,7 +533,12 @@ pub fn focus_widget(frame: &mut Frame, id: &str) {
 pub fn raw_icon(frame: &mut Frame, id: lens::sys::lens_icon_id, size: f32) {
     // SAFETY: the frame is live for the build callback; `id` is a value of
     // the generated bindgen enum.
-    unsafe { lens::sys::lens_icon(frame.as_raw(), id, size) };
+    let opts = lens::sys::lens_icon_opts {
+        id,
+        size,
+        ..Default::default()
+    };
+    unsafe { lens::sys::lens_icon(frame.as_raw(), &opts) };
 }
 
 /// The "go to parent folder" glyph.

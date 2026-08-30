@@ -24,7 +24,7 @@
 //! [`SecretBuffer`](super::secret_buffer::SecretBuffer) takes only what
 //! fits and never reallocates.
 
-use lens::{Align, Color, Frame, Input, LayoutOpts, Rect, key};
+use lens::{Align, Color, Frame, Input, Rect, key};
 
 use super::style::{self, metrics};
 use super::{Preedit, command_held, committed_text, ime_delete, key_down, key_pressed};
@@ -65,13 +65,12 @@ impl EditBuffer for String {
 }
 
 /// The caret bar drawn between text runs.
-pub fn caret_bar(color: Color) -> LayoutOpts {
-    LayoutOpts {
-        width: metrics::CARET_W,
-        height: metrics::CARET_H,
-        bg: color,
-        ..Default::default()
-    }
+pub fn render_caret(f: &mut Frame, color: Color) {
+    f.row()
+        .width(metrics::CARET_W)
+        .height(metrics::CARET_H)
+        .bg(color)
+        .empty();
 }
 
 /// Insert text at the caret, dropping control characters (single line).
@@ -201,20 +200,6 @@ pub fn edit_surface(
     surface: EditSurface<'_>,
 ) -> lens::Response {
     let palette = appearance.palette();
-    let opts = LayoutOpts {
-        height: metrics::FIELD_HEIGHT,
-        pad: metrics::SPACE_S,
-        cross: Align::Center,
-        bg: palette.field,
-        border: if surface.focused {
-            palette.accent
-        } else {
-            palette.border
-        },
-        border_width: 1.0,
-        radius: metrics::RADIUS,
-        ..Default::default()
-    };
 
     let (before, after) = surface.text.split_at(surface.caret);
     // Masked surfaces measure and render bullets; the real text and the
@@ -249,67 +234,66 @@ pub fn edit_surface(
     let empty = before.is_empty() && after.is_empty() && !runs.has_preedit;
     let focused = surface.focused;
     let id = surface.id;
-    let (response, ()) = f.pressable_row(id, "", &opts, |f, _| {
-        if empty {
-            if focused {
-                f.row_ex(&caret_bar(palette.text), |_| {});
+    let (response, ()) = f
+        .row()
+        .height(metrics::FIELD_HEIGHT)
+        .pad(metrics::SPACE_S)
+        .items_center()
+        .bg(palette.field)
+        .border(if surface.focused {
+            palette.accent
+        } else {
+            palette.border
+        })
+        .border_width(1.0)
+        .rounded(metrics::RADIUS)
+        .id(id)
+        .show(|f| {
+            if empty {
+                if focused {
+                    render_caret(f, palette.text);
+                }
+                f.push_style(style::muted_style_for(&palette));
+                f.label(surface.placeholder);
+                f.pop_style();
+                return;
             }
-            f.push_style(style::muted_style_for(&palette));
-            f.label(surface.placeholder);
-            f.pop_style();
-            return;
-        }
-        if !runs.before.is_empty() {
-            f.label(runs.before);
-        }
-        if runs.has_preedit {
-            // The composition: accent text underlined, caret inside at the
-            // preedit cursor — the same reading lens's textfield gives.
-            f.column_ex(
-                &LayoutOpts {
-                    gap: 0.0,
-                    cross: Align::Stretch,
-                    ..Default::default()
-                },
-                |f| {
-                    f.row_ex(
-                        &LayoutOpts {
-                            gap: 0.0,
-                            cross: Align::Center,
-                            ..Default::default()
-                        },
-                        |f| {
-                            f.push_style(style::accent_text_style_for(&palette));
-                            if !runs.pre_before.is_empty() {
-                                f.label(runs.pre_before);
-                            }
-                            if focused {
-                                f.row_ex(&caret_bar(palette.text), |_| {});
-                            }
-                            if !runs.pre_after.is_empty() {
-                                f.label(runs.pre_after);
-                            }
-                            f.pop_style();
-                        },
-                    );
-                    // The underline stretches to the text row's width.
-                    f.row_ex(
-                        &LayoutOpts {
-                            height: 1.0,
-                            bg: palette.accent,
-                            ..Default::default()
-                        },
-                        |_| {},
-                    );
-                },
-            );
-        } else if focused {
-            f.row_ex(&caret_bar(palette.text), |_| {});
-        }
-        if !runs.after.is_empty() {
-            f.label(runs.after);
-        }
-    });
+            if !runs.before.is_empty() {
+                f.label(runs.before);
+            }
+            if runs.has_preedit {
+                // The composition: accent text underlined, caret inside at the
+                // preedit cursor — the same reading lens's textfield gives.
+                f.col()
+                    .gap(0.0)
+                    .cross(Align::Stretch)
+                    .show_flat(|f| {
+                        f.row()
+                            .gap(0.0)
+                            .items_center()
+                            .show_flat(|f| {
+                                f.push_style(style::accent_text_style_for(&palette));
+                                if !runs.pre_before.is_empty() {
+                                    f.label(runs.pre_before);
+                                }
+                                if focused {
+                                    render_caret(f, palette.text);
+                                }
+                                if !runs.pre_after.is_empty() {
+                                    f.label(runs.pre_after);
+                                }
+                                f.pop_style();
+                            });
+                        // The underline stretches to the text row's width.
+                        f.row().height(1.0).bg(palette.accent).empty();
+                    });
+            } else if focused {
+                render_caret(f, palette.text);
+            }
+            if !runs.after.is_empty() {
+                f.label(runs.after);
+            }
+        });
 
     if focused && let Some(bounds) = f.node_bounds(id) {
         let visual_before = format!("{}{}", runs.before, runs.pre_before);

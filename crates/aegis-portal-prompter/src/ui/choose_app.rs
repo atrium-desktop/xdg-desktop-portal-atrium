@@ -13,13 +13,13 @@
 //! bump.
 
 use aegis_portal_prompter::{ChooseAppRequest, ChooseAppResponse, PromptAppearance, PromptResult};
-use lens::{Align, Frame, Input, LayoutOpts, TableColumn, TableOpts};
+use lens::{Band, Frame, Input, PlaceMode, PlaceOpts, key};
 
 use super::style::ThemeInput;
 use super::style::{self, metrics};
 use super::{
-    WindowChrome, close_window, display_size, escape_pressed, focus_widget, run_window_with_chrome,
-    window_title,
+    WindowChrome, close_window, display_size, escape_pressed, focus_widget, key_pressed,
+    run_window_with_chrome, window_title,
 };
 
 /// The listing table's id. One dialog runs per prompter process, so a
@@ -92,15 +92,23 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
         return;
     }
 
+    if key_pressed(input, key::RETURN) {
+        accept(state);
+        return;
+    }
+    if key_pressed(input, key::UP) && state.selected > 0 {
+        state.selected -= 1;
+    }
+    if key_pressed(input, key::DOWN) && ((state.selected + 1) as usize) < state.request.apps.len() {
+        state.selected += 1;
+    }
+
     let width = display_size(input).0 - 2.0 * metrics::SPACE_L;
-    f.column_ex(
-        &LayoutOpts {
-            gap: metrics::SPACE_S,
-            pad: metrics::SPACE_L,
-            flex: 1.0,
-            ..Default::default()
-        },
-        |f| {
+    f.col()
+        .gap(metrics::SPACE_S)
+        .pad(metrics::SPACE_L)
+        .flex(1.0)
+        .show_flat(|f| {
             f.push_style(style::title_style());
             f.label(&state.request.title);
             f.pop_style();
@@ -122,37 +130,17 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
             }
             f.flex(1.0);
             let apps = &state.request.apps;
-            let mut cursor = state.selected;
-            let result = f.table_ex(
-                LIST_ID,
-                &[TableColumn {
-                    title: "Application",
-                    width: 0.0,
-                    align: Align::Start,
-                }],
-                apps.len(),
-                TableOpts {
-                    row_height: metrics::ROW_HEIGHT,
-                    show_header: false,
-                    selectable: true,
-                    zebra: false,
-                    keyboard: true,
-                },
-                |row, _col| apps[row].name.clone(),
-                |_, _| None,
-                |row| row as i32 == state.selected,
-                &mut cursor,
-            );
-            if result.cursor_changed && cursor >= 0 {
-                state.selected = cursor;
-            }
-            if let Some(row) = result.clicked_row {
-                state.selected = row as i32;
-            }
-            if result.activated {
-                accept(state);
-                return;
-            }
+            let current_selected = state.selected;
+            f.scroll(LIST_ID, |f| {
+                f.col().gap(2.0).show_flat(|f| {
+                    for (idx, app) in apps.iter().enumerate() {
+                        let is_selected = idx as i32 == current_selected;
+                        if f.selectable(&app.name, is_selected) {
+                            state.selected = idx as i32;
+                        }
+                    }
+                });
+            });
 
             // ---- embedded choices ---------------------------------------
             for index in 0..state.request.choices.len() {
@@ -160,13 +148,10 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
             }
 
             // ---- footer buttons ------------------------------------------
-            f.row_ex(
-                &LayoutOpts {
-                    gap: metrics::SPACE_S,
-                    cross: Align::Center,
-                    ..Default::default()
-                },
-                |f| {
+            f.row()
+                .gap(metrics::SPACE_S)
+                .items_center()
+                .show_flat(|f| {
                     f.flex(1.0);
                     f.spacer(0.0);
 
@@ -185,10 +170,8 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                     if f.button("Select") {
                         accept(state);
                     }
-                },
-            );
-        },
-    );
+                });
+        });
 }
 
 /// Whether an embedded choice's dropdown popup is open (it swallows
@@ -198,7 +181,7 @@ fn choices_popup_open(state: &State, f: &mut Frame) -> bool {
         .request
         .choices
         .iter()
-        .any(|choice| f.place_is_open(&format!("choice-{}##ov", choice.id)))
+        .any(|choice| f.place_is_open(&format!("choice-{}", choice.id)))
 }
 
 /// One embedded choice: a boolean checkbox, or a labeled dropdown of
@@ -210,22 +193,36 @@ fn choice_row(state: &mut State, f: &mut Frame, index: usize) {
             f.checkbox(&choice.label, value);
         }
         ChoiceState::Options(selected) => {
-            f.row_ex(
-                &LayoutOpts {
-                    gap: metrics::SPACE_S,
-                    cross: Align::Center,
-                    ..Default::default()
-                },
-                |f| {
+            let popup_id = format!("choice-{}", choice.id);
+            f.row()
+                .gap(metrics::SPACE_S)
+                .items_center()
+                .show_flat(|f| {
                     f.label(&choice.label);
                     let labels: Vec<&str> = choice
                         .options
                         .iter()
                         .map(|(_, label)| label.as_str())
                         .collect();
-                    f.dropdown(&format!("choice-{}", choice.id), selected, &labels);
-                },
-            );
+                    let current_label = labels.get((*selected).max(0) as usize).copied().unwrap_or("");
+                    if f.button(current_label) {
+                        f.place_toggle(&popup_id);
+                    }
+                    f.place(&popup_id, &PlaceOpts {
+                        mode: PlaceMode::Anchored,
+                        band: Band::Popup,
+                        ..Default::default()
+                    }, |f| {
+                        f.col().show_flat(|f| {
+                            for (idx, &label) in labels.iter().enumerate() {
+                                if f.selectable(label, idx as i32 == *selected) {
+                                    *selected = idx as i32;
+                                    f.place_close(&popup_id);
+                                }
+                            }
+                        });
+                    });
+                });
         }
     }
 }
