@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.27] - 2026-08-30
+
+### Changed
+
+- Promoted Optics dependencies to `v0.0.32` and aligned UI components with the updated Optics/Lens box model and layout APIs.
+
 ## [0.0.26] - 2026-08-29
 
 ### Changed
