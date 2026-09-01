@@ -55,6 +55,7 @@ use zeroize::Zeroizing;
 use crate::settings::SettingsStore;
 
 const PROMPTER_ENV: &str = "AEGIS_PORTAL_PROMPTER";
+const FILE_CHOOSER_ENV: &str = "AEGIS_FILE_CHOOSER_PROMPTER";
 const MAX_MESSAGE_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -143,8 +144,12 @@ fn invoke_raw(
     request: PrompterRequest,
     cancellation: Option<&dyn Fn() -> bool>,
 ) -> Result<PromptResult, InvokeError> {
-    let executable = executable().map_err(InvokeError::Failed)?;
-    let mut child = Command::new(&executable)
+    let (executable, args) = prompt_command(&request).map_err(InvokeError::Failed)?;
+    let mut cmd = Command::new(&executable);
+    for arg in &args {
+        cmd.arg(arg);
+    }
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -328,6 +333,34 @@ impl Drop for MlockGuard {
 /// The prompter executable's path: `$AEGIS_PORTAL_PROMPTER`, then beside
 /// the backend, then the standard libexec directories. Shared by the
 /// one-shot invocation and the notification daemon spawn.
+pub(crate) fn prompt_command(request: &PrompterRequest) -> Result<(PathBuf, Vec<&'static str>), String> {
+    if matches!(request.prompt, aegis_portal_prompter::PromptRequest::FileChooser(_)) {
+        if let Some(path) = std::env::var_os(FILE_CHOOSER_ENV).filter(|path| !path.is_empty()) {
+            return Ok((PathBuf::from(path), vec!["--chooser-prompt"]));
+        }
+        if let Some(path) = std::env::var_os(PROMPTER_ENV).filter(|path| !path.is_empty()) {
+            return Ok((PathBuf::from(path), Vec::new()));
+        }
+        if let Ok(current) = std::env::current_exe()
+            && let Some(directory) = current.parent()
+        {
+            let sibling = directory.join("lantern");
+            if sibling.is_file() {
+                return Ok((sibling, vec!["--chooser-prompt"]));
+            }
+        }
+        for installed in [
+            PathBuf::from("/usr/bin/lantern"),
+            PathBuf::from("/usr/local/bin/lantern"),
+        ] {
+            if installed.is_file() {
+                return Ok((installed, vec!["--chooser-prompt"]));
+            }
+        }
+    }
+    executable().map(|path| (path, Vec::new()))
+}
+
 pub(crate) fn executable() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os(PROMPTER_ENV).filter(|path| !path.is_empty()) {
         return Ok(PathBuf::from(path));
