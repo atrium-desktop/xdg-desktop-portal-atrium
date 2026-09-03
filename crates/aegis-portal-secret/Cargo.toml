@@ -11,17 +11,15 @@ rust-version.workspace = true
 
 [dependencies]
 aegis-portal-runtime.workspace = true
+credential-client = { path = "../../../credentiald/crates/credential-client" }
+credential-core = { path = "../../../credentiald/crates/credential-core" }
+credential-crypto = { path = "../../../credentiald/crates/credential-crypto" }
+credential-store = { path = "../../../credentiald/crates/credential-store" }
 async-channel = { workspace = true }
-argon2 = { workspace = true }
-chacha20poly1305 = { workspace = true }
-dirs.workspace = true
-hkdf = { workspace = true }
 libc.workspace = true
 log.workspace = true
-rand = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
-sha2 = { workspace = true }
 thiserror.workspace = true
 zbus.workspace = true
 zeroize = { workspace = true, features = ["derive"] }

@@ -70,20 +70,29 @@ name = "aegis-portal-secret"
 version = "0.0.27"
 dependencies = [
  "aegis-portal-runtime",
- "argon2",
  "async-channel",
- "chacha20poly1305",
- "dirs",
- "hkdf",
+ "credential-client",
+ "credential-core",
+ "credential-crypto",
+ "credential-store",
  "libc",
  "log",
- "rand",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 1.0.69",
  "zbus",
  "zeroize",
+]
+
+[[package]]
+name = "aes"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures",
 ]
 
 [[package]]
@@ -368,6 +377,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-padding"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8894febbff9f758034a5b8e12d87918f56dfc64a8e1fe757d65e29041538d93"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "blocking"
 version = "1.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -397,6 +415,21 @@ name = "byteorder-lite"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
+
+[[package]]
+name = "bytes"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+
+[[package]]
+name = "cbc"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26b52a9543ae338f279b96b0b9fed9c8093744685043739079ce85cd58f289a6"
+dependencies = [
+ "cipher",
+]
 
 [[package]]
 name = "cc"
@@ -522,6 +555,90 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8498c871161e1742aaa9d52551b2d6ebdd4c3d45a3be423e3728f33b955be550"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "credential-client"
+version = "0.1.0"
+dependencies = [
+ "credential-core",
+ "credential-ipc",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "credential-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "zeroize",
+]
+
+[[package]]
+name = "credential-crypto"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "argon2",
+ "cbc",
+ "chacha20poly1305",
+ "credential-core",
+ "hkdf",
+ "num-bigint",
+ "num-traits",
+ "rand",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
+ "zeroize",
+]
+
+[[package]]
+name = "credential-ipc"
+version = "0.1.0"
+dependencies = [
+ "credential-core",
+ "credential-crypto",
+ "credential-service",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "credential-service"
+version = "0.1.0"
+dependencies = [
+ "credential-core",
+ "credential-crypto",
+ "credential-store",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "credential-store"
+version = "0.1.0"
+dependencies = [
+ "credential-core",
+ "credential-crypto",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -730,7 +847,6 @@ dependencies = [
 [[package]]
 name = "flux"
 version = "0.1.1"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.32#99140f390f0ec37bb0f3c5d3a25f4ab37c9de0ee"
 dependencies = [
  "flux-sys",
 ]
@@ -738,7 +854,6 @@ dependencies = [
 [[package]]
 name = "flux-sys"
 version = "0.1.1"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.32#99140f390f0ec37bb0f3c5d3a25f4ab37c9de0ee"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -921,13 +1036,13 @@ version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
+ "block-padding",
  "generic-array",
 ]
 
 [[package]]
 name = "iris"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.32#99140f390f0ec37bb0f3c5d3a25f4ab37c9de0ee"
 dependencies = [
  "flux",
  "iris-sys",
@@ -938,7 +1053,6 @@ dependencies = [
 [[package]]
 name = "iris-sys"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.32#99140f390f0ec37bb0f3c5d3a25f4ab37c9de0ee"
 dependencies = [
  "bindgen",
  "flux-sys",
@@ -1017,7 +1131,6 @@ dependencies = [
 [[package]]
 name = "lens"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.32#99140f390f0ec37bb0f3c5d3a25f4ab37c9de0ee"
 dependencies = [
  "flux",
  "lens-sys",
@@ -1026,7 +1139,6 @@ dependencies = [
 [[package]]
 name = "lens-sys"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics?tag=v0.0.32#99140f390f0ec37bb0f3c5d3a25f4ab37c9de0ee"
 dependencies = [
  "bindgen",
  "flux-sys",
@@ -1092,6 +1204,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "lock_api"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1145,6 +1266,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mio"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30d65c71f1ce40ab09135ce117d742b9f8a19ff91a41a8b57ed50bc2de59c427"
+dependencies = [
+ "libc",
+ "wasi",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1171,6 +1303,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+dependencies = [
+ "num-integer",
+ "num-traits",
+ "rand",
+]
+
+[[package]]
+name = "num-integer"
+version = "0.1.47"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
@@ -1221,6 +1373,29 @@ name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
+
+[[package]]
+name = "parking_lot"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
+dependencies = [
+ "lock_api",
+ "parking_lot_core",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "redox_syscall",
+ "smallvec",
+ "windows-link",
+]
 
 [[package]]
 name = "password-hash"
@@ -1429,6 +1604,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_syscall"
+version = "0.5.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
+dependencies = [
+ "bitflags 2.13.1",
+]
+
+[[package]]
 name = "redox_users"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1492,6 +1676,12 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "scopeguard"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "serde"
@@ -1608,6 +1798,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1701,6 +1901,34 @@ name = "thiserror-impl"
 version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "tokio"
+version = "1.53.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+dependencies = [
+ "bytes",
+ "libc",
+ "mio",
+ "parking_lot",
+ "pin-project-lite",
+ "signal-hook-registry",
+ "socket2",
+ "tokio-macros",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
