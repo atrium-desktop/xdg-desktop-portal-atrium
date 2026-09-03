@@ -20,10 +20,10 @@ reports that nothing changed.
 
 `.githooks/pre-commit` inspects staged changes to `Cargo.toml`,
 `Cargo.lock`, `.cargo/`, and every crate manifest. It rejects any added
-line referencing the Aegis source repository — an `aegis-shell/aegis` Git
-source or a `../aegis` path dependency. Portal builds must not depend on
-Aegis sources; compositor integration goes through the Portal-owned
-`aegis-portal-ipc` wire projection instead (see
+line referencing the Tessera source repository — an `aegis-shell/tessera` Git
+source or a `../tessera` path dependency. Portal builds must not depend on
+Tessera sources; compositor integration goes through the Portal-owned
+`atrium-portal-ipc` wire projection instead (see
 [Cross-Repository Protocol Development](cross-repository-development.md)).
 Do not bypass the hook.
 
@@ -46,10 +46,10 @@ meson-cargo-build.sh portal <source-root> <build-root> <cargo> <portal-out> <pro
 meson-cargo-build.sh pam <source-root> <build-root> <cargo> <pam-out>
 ```
 
-The `portal` mode builds `xdg-desktop-portal-aegis` and
-`aegis-portal-prompter` with `--locked --release` into the build root's
+The `portal` mode builds `xdg-desktop-portal-atrium` and
+`atrium-portal-prompter` with `--locked --release` into the build root's
 `cargo-target/` and copies both binaries to the Meson output paths; the
-`pam` mode does the same for `libpam_aegis.so`. Run it through Meson, not
+`pam` mode does the same for `libpam_atrium.so`. Run it through Meson, not
 by hand; `meson compile` wires the arguments.
 
 ## `scripts/optics-release-ref.sh`
@@ -72,7 +72,7 @@ added.
 
 `rustc-link-arg` does not propagate across crates, so the terminal
 binary must re-emit the optics library paths itself.
-`crates/aegis-portal-prompter/build.rs` reads the `DEP_IRIS_RPATHS`,
+`crates/atrium-portal-prompter/build.rs` reads the `DEP_IRIS_RPATHS`,
 `DEP_LENS_RPATHS`, and `DEP_FLUX_RPATHS` metadata published by the optics
 `-sys` crates and re-emits them as link search paths plus `DT_RPATH`
 entries (via `-Wl,--disable-new-dtags`, so the search also covers

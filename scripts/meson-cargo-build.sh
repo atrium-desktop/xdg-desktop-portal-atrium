@@ -18,11 +18,11 @@ case "$mode" in
         --manifest-path "$source_root/Cargo.toml" \
         --target-dir "$target_dir" \
         --locked --release \
-        -p xdg-desktop-portal-aegis \
-        -p aegis-portal-prompter
+        -p xdg-desktop-portal-atrium \
+        -p atrium-portal-prompter
     )
-    cp "$target_dir/release/xdg-desktop-portal-aegis" "$1"
-    cp "$target_dir/release/aegis-portal-prompter" "$2"
+    cp "$target_dir/release/xdg-desktop-portal-atrium" "$1"
+    cp "$target_dir/release/atrium-portal-prompter" "$2"
     ;;
   pam)
     test "$#" -eq 1
@@ -32,9 +32,9 @@ case "$mode" in
         --manifest-path "$source_root/Cargo.toml" \
         --target-dir "$target_dir" \
         --locked --release \
-        -p aegis-pam
+        -p atrium-pam
     )
-    cp "$target_dir/release/libpam_aegis.so" "$1"
+    cp "$target_dir/release/libpam_atrium.so" "$1"
     ;;
   *)
     printf 'unknown artifact mode: %s\n' "$mode" >&2

@@ -9,11 +9,11 @@ Do not bypass Git hooks. Enable them once per clone with
 `scripts/setup-dev.sh` (idempotent; sets `core.hooksPath` to
 `.githooks`).
 
-Keep the Portal source and build graph independent from the Aegis repository:
+Keep the Portal source and build graph independent from the Tessera repository:
 
-- Do not add Aegis internal crates, Aegis Git dependencies, or sibling-path
+- Do not add Tessera internal crates, Tessera Git dependencies, or sibling-path
   patches.
-- Put compositor integration in the Portal-owned `aegis-portal-ipc` wire
+- Put compositor integration in the Portal-owned `atrium-portal-ipc` wire
   projection and keep it limited to compositor-owned resources.
 - Test wire changes with literal protocol fixtures and the independent test
   server; do not import the compositor's server implementation into tests.
@@ -30,7 +30,7 @@ checkout:
 - Promote an Optics release by bumping every tagged dependency in
   `Cargo.toml` together and regenerating the canonical lockfile; keep
   `scripts/optics-release-ref.sh`'s expected package count in sync.
-- `aegis-portal-prompter/build.rs` re-emits the `-sys` crates' rpath
+- `atrium-portal-prompter/build.rs` re-emits the `-sys` crates' rpath
   metadata so the binary finds the chosen liblens/libflux/libiris at
   runtime; the direct `flux-sys`/`iris-sys`/`lens-sys` dependencies exist
   only to make that metadata visible — do not prune them.

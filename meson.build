@@ -1,5 +1,5 @@
 project(
-  'xdg-desktop-portal-aegis',
+  'xdg-desktop-portal-atrium',
   version: '0.0.27',
   meson_version: '>=1.3.0',
 )
@@ -19,7 +19,7 @@ datadir = get_option('prefix') / get_option('datadir')
 
 portal_artifacts = custom_target(
   'cargo-portal-artifacts',
-  output: ['xdg-desktop-portal-aegis', 'aegis-portal-prompter'],
+  output: ['xdg-desktop-portal-atrium', 'atrium-portal-prompter'],
   command: [
     artifact_builder,
     'portal',
@@ -38,26 +38,26 @@ portal_artifacts = custom_target(
 service_config = configuration_data()
 service_config.set('libexecdir', libexecdir)
 configure_file(
-  input: 'contrib/dbus-1/services/org.freedesktop.impl.portal.desktop.aegis.service.in',
-  output: 'org.freedesktop.impl.portal.desktop.aegis.service',
+  input: 'contrib/dbus-1/services/org.freedesktop.impl.portal.desktop.atrium.service.in',
+  output: 'org.freedesktop.impl.portal.desktop.atrium.service',
   configuration: service_config,
   install: true,
   install_dir: datadir / 'dbus-1/services',
 )
 
 install_data(
-  'contrib/xdg-desktop-portal/portals/aegis.portal',
+  'contrib/xdg-desktop-portal/portals/atrium.portal',
   install_dir: datadir / 'xdg-desktop-portal/portals',
 )
 install_data(
-  'contrib/xdg-desktop-portal/aegis-portals.conf',
+  'contrib/xdg-desktop-portal/atrium-portals.conf',
   install_dir: datadir / 'xdg-desktop-portal',
 )
 
 if get_option('pam')
   custom_target(
     'cargo-pam-artifact',
-    output: 'pam_aegis.so',
+    output: 'pam_atrium.so',
     command: [
       artifact_builder,
       'pam',

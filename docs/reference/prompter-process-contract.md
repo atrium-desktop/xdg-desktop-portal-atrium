@@ -1,10 +1,10 @@
 # Prompter Process Contract
 
-The `aegis-portal-prompter` binary renders all Portal-owned UI. This page
+The `atrium-portal-prompter` binary renders all Portal-owned UI. This page
 summarizes its two process contracts for lookup; the field-level truth is
-`crates/aegis-portal-prompter/src/lib.rs` (one-shot prompts),
-`crates/aegis-portal-prompter/src/notify.rs` (notification daemon), and
-`crates/aegis-portal-prompter/src/main.rs` (binary framing).
+`crates/atrium-portal-prompter/src/lib.rs` (one-shot prompts),
+`crates/atrium-portal-prompter/src/notify.rs` (notification daemon), and
+`crates/atrium-portal-prompter/src/main.rs` (binary framing).
 [Portal UI Testing](../dev/portal-ui-testing.md) shows how to drive both
 contracts by hand. Decision history lives in
 [ADR-0004](../adr/0004-portal-ownership-and-runtime-ipc-boundary.md) and
@@ -15,7 +15,7 @@ contracts by hand. Decision history lives in
 Standard output is the protocol wire in both contracts; standard error is
 the diagnostics channel. At startup, before any library code runs, the
 prompter claims the wire (`Wire::acquire` in
-`crates/aegis-portal-prompter/src/wire.rs`): fd 1 is duplicated into a
+`crates/atrium-portal-prompter/src/wire.rs`): fd 1 is duplicated into a
 private descriptor that both protocol writers use, and fd 1 itself is
 re-aliased onto fd 2 for the rest of the process lifetime. A library — or
 a stray `println!` — that writes to stdout lands on the journal as a
@@ -41,7 +41,7 @@ envelopes deny unknown fields.
 
 Every request carries an optional `appearance` object — the compositor's
 desktop preferences projected by the backend from its settings store
-(Aegis IPC `GetSettings`): `color_scheme` (`system`/`dark`/`light`),
+(Tessera IPC `GetSettings`): `color_scheme` (`system`/`dark`/`light`),
 `accent_color` (`null` or 8-bit RGB), `high_contrast`, and
 `reduced_motion`. The prompter resolves the palette from it (an explicit
 scheme beats the platform query; `system` defers to it), overrides the

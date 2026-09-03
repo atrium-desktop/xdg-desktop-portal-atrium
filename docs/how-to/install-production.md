@@ -10,9 +10,9 @@ uses the CUPS `lp` client at runtime; both are ordinary session services,
 not build dependencies. Install PAM
 development files only when the optional PAM module is required.
 
-Install an Aegis runtime that implements the protocol version in the
+Install a Tessera runtime that implements the protocol version in the
 [Compatibility Reference](../reference/compatibility.md). The Portal build
-does not require an Aegis source checkout, Cargo package, or path override.
+does not require a Tessera source checkout, Cargo package, or path override.
 
 ## Build and Install
 
@@ -31,8 +31,8 @@ DESTDIR="$PWD/stage" meson install -C build
 ```
 
 Meson installs both private executables under the configured `libexecdir`,
-generates the matching D-Bus service, and installs `aegis.portal` plus
-`aegis-portals.conf` under the configured data directory.
+generates the matching D-Bus service, and installs `atrium.portal` plus
+`atrium-portals.conf` under the configured data directory.
 
 ## Enable PAM Unlock
 
@@ -51,12 +51,12 @@ module that sets the new authentication token. The exact files are
 display-manager specific.
 
 ```text
-auth optional pam_aegis.so
-session optional pam_aegis.so
-password optional pam_aegis.so
+auth optional pam_atrium.so
+session optional pam_atrium.so
+password optional pam_atrium.so
 ```
 
-Keep the control flag `optional`. `pam_aegis.so` never grants or denies
+Keep the control flag `optional`. `pam_atrium.so` never grants or denies
 authentication: the unlock token is planted only once the login is
 confirmed, and the `password` line lets the vault password follow login
 password changes.
@@ -70,7 +70,7 @@ systemctl --user restart xdg-desktop-portal.service
 ```
 
 Log out and back in when the session does not use the systemd user service.
-Confirm that `XDG_CURRENT_DESKTOP` contains `aegis` before starting the
+Confirm that `XDG_CURRENT_DESKTOP` contains `tessera` before starting the
 session portal.
 
 ## Validate the Installation
@@ -79,7 +79,7 @@ Confirm the installed files and activate the backend:
 
 ```bash
 busctl --user introspect \
-  org.freedesktop.impl.portal.desktop.aegis \
+  org.freedesktop.impl.portal.desktop.atrium \
   /org/freedesktop/portal/desktop
 ```
 
@@ -105,17 +105,17 @@ wpctl status
 
 Releases before [ADR-0007](../adr/0007-full-stack-interface-ownership.md)
 delegated uncovered interfaces to `xdg-desktop-portal-gtk` through an
-`aegis;gtk` route. Migrate such a deployment before starting the new
+`tessera;gtk` route. Migrate such a deployment before starting the new
 backend:
 
 1. Remove the `xdg-desktop-portal-gtk` package. Every interface the routing
    configuration names is now served natively, so the fallback serves
    nothing.
 2. Delete any portals configuration that still routes to `gtk`. Check for
-   `portals.conf` or `*-portals.conf` files naming `aegis;gtk` under
+   `portals.conf` or `*-portals.conf` files naming `tessera;gtk` under
    `/usr/share/xdg-desktop-portal/`, `/etc/xdg/xdg-desktop-portal/`, and
    `~/.config/xdg-desktop-portal/`. The new package installs
-   `aegis-portals.conf` with `aegis`-only routes; remove hand-written
+   `atrium-portals.conf` with `tessera`-only routes; remove hand-written
    overrides rather than editing the packaged file.
 3. Install the new package as in [Build and Install](#build-and-install).
 4. Restart the frontend as in
@@ -124,7 +124,7 @@ backend:
    [Validate the Installation](#validate-the-installation). The output must
    list the native interfaces only; interfaces that used to fall back
    (Inhibit, AppChooser, Notification, DynamicLauncher, Wallpaper, Access,
-   OpenURI, Background, Print) are now served by the Aegis backend itself.
+   OpenURI, Background, Print) are now served by the Tessera backend itself.
 
 ## Back Up or Migrate Secrets
 

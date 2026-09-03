@@ -130,8 +130,8 @@ jobs:
           tool: nextest
       - name: Test
         env:
-          AEGIS_PORTAL_REQUIRE_E2E: "1"
-          AEGIS_PORTAL_REQUIRE_PIPEWIRE_E2E: "1"
+          ATRIUM_PORTAL_REQUIRE_E2E: "1"
+          ATRIUM_PORTAL_REQUIRE_PIPEWIRE_E2E: "1"
         run: |
           cargo nextest run --profile ci --locked --workspace
           cargo test --doc --locked --workspace
@@ -144,24 +144,24 @@ jobs:
           meson setup build-package --buildtype=release --prefix=/usr -Dpam=false
           meson compile -C build-package
           DESTDIR="$PWD/stage" meson install -C build-package
-          test -x stage/usr/libexec/xdg-desktop-portal-aegis
-          test -x stage/usr/libexec/aegis-portal-prompter
-          grep -Fx 'Exec=/usr/libexec/xdg-desktop-portal-aegis' \
-            stage/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.aegis.service
-          test -z "$(find stage -path '*/security/pam_aegis.so' -print -quit)"
+          test -x stage/usr/libexec/xdg-desktop-portal-atrium
+          test -x stage/usr/libexec/atrium-portal-prompter
+          grep -Fx 'Exec=/usr/libexec/xdg-desktop-portal-atrium' \
+            stage/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.atrium.service
+          test -z "$(find stage -path '*/security/pam_atrium.so' -print -quit)"
 
           meson setup build-package --reconfigure -Dpam=true
           meson compile -C build-package
           DESTDIR="$PWD/stage-pam" meson install -C build-package
-          find stage-pam -path '*/security/pam_aegis.so' \
+          find stage-pam -path '*/security/pam_atrium.so' \
             -type f -perm /111 -print -quit | grep -q .
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@0.8.7
       - name: Coverage
         env:
-          AEGIS_PORTAL_REQUIRE_E2E: "1"
-          AEGIS_PORTAL_REQUIRE_PIPEWIRE_E2E: "1"
+          ATRIUM_PORTAL_REQUIRE_E2E: "1"
+          ATRIUM_PORTAL_REQUIRE_PIPEWIRE_E2E: "1"
         run: cargo llvm-cov --locked --workspace --lcov --output-path lcov.info
       - name: Upload coverage report
         uses: actions/upload-artifact@v4

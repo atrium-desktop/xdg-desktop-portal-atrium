@@ -1,0 +1,52 @@
+[package]
+name = "xdg-desktop-portal-atrium"
+description = "xdg-desktop-portal backend with a narrow runtime bridge for Tessera compositor resources"
+readme = "README.md"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+atrium-portal-ipc = { workspace = true }
+atrium-portal-prompter = { workspace = true }
+atrium-portal-runtime = { workspace = true }
+atrium-portal-secret = { workspace = true }
+# Session D-Bus bridge: pure-Rust zbus with the blocking API so the service
+# stays on a plain `std::thread` model without an async runtime.
+zbus = { workspace = true }
+async-channel = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+# ScreenCast delivery: a PipeWire producer stream fed from the compositor's
+# scoped IPC frame stream. Rust binding over the system
+# libpipewire (rust-version 1.80, within the workspace MSRV); no tokio.
+# v0_3_34 enables pw_stream_trigger_process so the portal can push compositor
+# frames to PipeWire as they arrive instead of letting the consumer over-read
+# stale frames.
+pipewire = { version = "0.10", features = ["v0_3_34"] }
+dirs = { workspace = true }
+rand = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+# Account portal: getpwuid for the account id and GECOS real name.
+libc = { workspace = true }
+
+[dev-dependencies]
+# Independent wire-format fixtures keep the assembled daemon tests from
+# trusting the secret implementation under test.
+atrium-portal-ipc = { workspace = true, features = ["test-server"] }
+argon2 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+hkdf = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = { workspace = true }
+
+[lib]
+name = "atrium_portal"
+path = "src/lib.rs"

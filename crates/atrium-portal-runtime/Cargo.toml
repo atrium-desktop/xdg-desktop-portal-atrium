@@ -1,0 +1,15 @@
+[package]
+name = "atrium-portal-runtime"
+description = "Shared request lifecycle primitives for Tessera portal backend components"
+readme = "README.md"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-channel = { workspace = true }
+log.workspace = true
+zbus.workspace = true

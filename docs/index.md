@@ -1,10 +1,10 @@
 # Documentation
 
 - [Compatibility Reference](reference/compatibility.md) lists supported
-  Portal and Aegis release pairs.
+  Portal and Tessera release pairs.
 - [Portal Support Reference](reference/portal-support.md) lists native and
   delegated interfaces and operational state.
-- [Aegis IPC Wire Protocol](reference/ipc-wire-protocol.md) summarizes the
+- [Tessera IPC Wire Protocol](reference/ipc-wire-protocol.md) summarizes the
   compositor wire contract and its version gates.
 - [Cast Frame Path](reference/cast-frame-path.md) describes the runtime
   pixel path behind a running cast: ownership split, pacing, transports.

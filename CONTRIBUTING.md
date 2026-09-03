@@ -19,9 +19,9 @@ cargo test --locked --workspace
 ```
 
 `Cargo.lock` is committed and authoritative; always build with `--locked`.
-The Portal source and build graph is independent from the Aegis repository:
-do not add Aegis internal crates, Aegis Git dependencies, or sibling-path
-patches. Coordinate compositor wire changes through the `aegis-portal-ipc`
+The Portal source and build graph is independent from the Tessera repository:
+do not add Tessera internal crates, Tessera Git dependencies, or sibling-path
+patches. Coordinate compositor wire changes through the `atrium-portal-ipc`
 projection as described in
 [Cross-Repository Protocol Development](docs/dev/cross-repository-development.md).
 For joint development against a sibling optics checkout, enable the local
@@ -37,10 +37,10 @@ git config core.hooksPath .githooks
 ```
 
 The `pre-commit` hook rejects staged changes to `Cargo.toml`, `Cargo.lock`,
-`.cargo/`, or any crate manifest that reference the Aegis source repository
-(an `aegis-shell/aegis` Git source or a `../aegis` path dependency). Portal
-builds must not depend on Aegis sources; use the Portal-owned
-`aegis-portal-ipc` wire projection instead. Do not bypass the hooks.
+`.cargo/`, or any crate manifest that reference the Tessera source repository
+(an `aegis-shell/tessera` Git source or a `../tessera` path dependency). Portal
+builds must not depend on Tessera sources; use the Portal-owned
+`atrium-portal-ipc` wire projection instead. Do not bypass the hooks.
 
 ## Commits and Pull Requests
 
@@ -62,8 +62,8 @@ Every pull request runs, on Ubuntu 24.04 against the tagged optics release:
 ```bash
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
-AEGIS_PORTAL_REQUIRE_E2E=1 \
-AEGIS_PORTAL_REQUIRE_PIPEWIRE_E2E=1 \
+ATRIUM_PORTAL_REQUIRE_E2E=1 \
+ATRIUM_PORTAL_REQUIRE_PIPEWIRE_E2E=1 \
   cargo test --locked --workspace
 cargo deny check
 cargo doc --locked --workspace --no-deps

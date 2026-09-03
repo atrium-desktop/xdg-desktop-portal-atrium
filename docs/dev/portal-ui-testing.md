@@ -2,7 +2,7 @@
 
 Portal interactions surface in two places: **Portal-owned prompter
 windows** (iris/lens dialogs hosted by this repository) and
-**compositor-owned chrome pickers** (rendered by the running Aegis session
+**compositor-owned chrome pickers** (rendered by the running Tessera session
 for requests that need compositor resources). Every routed interface is
 served by this repository (see the
 [Portal Support Reference](../reference/portal-support.md)), so all portal
@@ -35,7 +35,7 @@ full request path.
 Build the prompter once per change:
 
 ```bash
-cargo build -p aegis-portal-prompter
+cargo build -p atrium-portal-prompter
 ```
 
 The binary resolves the optics shared libraries from the sibling meson
@@ -49,7 +49,7 @@ request to standard input and it shows the real lens window; the response
 JSON appears on standard output when you answer, press Escape, or close
 the window. No bus, daemon, or display server setup is required. The
 `"version"` field must equal
-`aegis_portal_prompter::PROCESS_CONTRACT_VERSION` (currently `6`);
+`atrium_portal_prompter::PROCESS_CONTRACT_VERSION` (currently `6`);
 `scripts/version-consistency.sh` checks that the payloads below stay in
 sync with it.
 
@@ -57,15 +57,15 @@ A confirmation dialog:
 
 ```bash
 printf '%s' '{"version":6,"prompt":{"kind":"confirm","request":{"title":"Smoke Test","body":"Lens UI works.","accept_label":"_Continue","modal":false,"parent_window":null}}}' \
-  | ./target/debug/aegis-portal-prompter; echo
+  | ./target/debug/atrium-portal-prompter; echo
 ```
 
 A secret prompt (masked editing: typing, Backspace, caret keys, Ctrl+V,
 Enter to submit):
 
 ```bash
-printf '%s' '{"version":6,"prompt":{"kind":"secret","request":{"title":"Unlock Keyring","reason":"dev.aegis.Test wants access."}}}' \
-  | ./target/debug/aegis-portal-prompter; echo
+printf '%s' '{"version":6,"prompt":{"kind":"secret","request":{"title":"Unlock Keyring","reason":"dev.tessera.Test wants access."}}}' \
+  | ./target/debug/atrium-portal-prompter; echo
 ```
 
 A confirmation dialog rendered with a compositor appearance snapshot
@@ -74,47 +74,47 @@ contrast, and reduced motion —
 
 ```bash
 printf '%s' '{"version":6,"prompt":{"kind":"confirm","request":{"title":"Smoke Test","body":"Light scheme with accent.","accept_label":"_Continue","modal":false,"parent_window":null}},"appearance":{"color_scheme":"light","accent_color":{"red":43,"green":101,"blue":232},"high_contrast":true,"reduced_motion":true}}}' \
-  | ./target/debug/aegis-portal-prompter; echo
+  | ./target/debug/atrium-portal-prompter; echo
 ```
 
 A file chooser with a filter and multi-selection:
 
 ```bash
-printf '%s' '{"version":6,"prompt":{"kind":"file_chooser","request":{"mode":"open_file","app_id":"dev.aegis.Test","title":"Open File","accept_label":null,"modal":false,"parent_window":null,"multiple":true,"current_folder":null,"current_name":null,"current_file":null,"filters":[{"label":"Images","rules":[{"kind":"glob","value":"*.png"}]}],"current_filter":null,"choices":[],"files":[]}}}' \
-  | ./target/debug/aegis-portal-prompter; echo
+printf '%s' '{"version":6,"prompt":{"kind":"file_chooser","request":{"mode":"open_file","app_id":"dev.tessera.Test","title":"Open File","accept_label":null,"modal":false,"parent_window":null,"multiple":true,"current_folder":null,"current_name":null,"current_file":null,"filters":[{"label":"Images","rules":[{"kind":"glob","value":"*.png"}]}],"current_filter":null,"choices":[],"files":[]}}}' \
+  | ./target/debug/atrium-portal-prompter; echo
 ```
 
 A save dialog — the download-location prompt a browser raises before
 writing a download — with a suggested file name:
 
 ```bash
-printf '%s' '{"version":6,"prompt":{"kind":"file_chooser","request":{"mode":"save_file","app_id":"dev.aegis.Test","title":"Save Download","accept_label":null,"modal":false,"parent_window":null,"multiple":false,"current_folder":null,"current_name":"report.pdf","current_file":null,"filters":[],"current_filter":null,"choices":[],"files":[]}}}' \
-  | ./target/debug/aegis-portal-prompter; echo
+printf '%s' '{"version":6,"prompt":{"kind":"file_chooser","request":{"mode":"save_file","app_id":"dev.tessera.Test","title":"Save Download","accept_label":null,"modal":false,"parent_window":null,"multiple":false,"current_folder":null,"current_name":"report.pdf","current_file":null,"filters":[],"current_filter":null,"choices":[],"files":[]}}}' \
+  | ./target/debug/atrium-portal-prompter; echo
 ```
 
 An application chooser (the AppChooser/OpenURI surface) with the
 remember checkbox:
 
 ```bash
-printf '%s' '{"version":6,"prompt":{"kind":"choose_app","request":{"app_id":"dev.aegis.Test","title":"Open With","content_type":"text/plain","parent_window":null,"apps":[{"id":"org.foo.Editor.desktop","name":"Foo Editor","icon":null},{"id":"org.bar.Notes.desktop","name":"Bar Notes","icon":null}],"choices":[{"id":"remember","label":"Remember this choice","options":[],"selected":"false"}]}}}' \
-  | ./target/debug/aegis-portal-prompter; echo
+printf '%s' '{"version":6,"prompt":{"kind":"choose_app","request":{"app_id":"dev.tessera.Test","title":"Open With","content_type":"text/plain","parent_window":null,"apps":[{"id":"org.foo.Editor.desktop","name":"Foo Editor","icon":null},{"id":"org.bar.Notes.desktop","name":"Bar Notes","icon":null}],"choices":[{"id":"remember","label":"Remember this choice","options":[],"selected":"false"}]}}}' \
+  | ./target/debug/atrium-portal-prompter; echo
 ```
 
 A launcher-name editor (the DynamicLauncher surface):
 
 ```bash
-printf '%s' '{"version":6,"prompt":{"kind":"launcher_edit","request":{"app_id":"dev.aegis.Test","title":"Install Launcher","name":"Cool App","editable_name":true,"target":null,"icon_label":"cool-app","modal":false,"parent_window":null}}}' \
-  | ./target/debug/aegis-portal-prompter; echo
+printf '%s' '{"version":6,"prompt":{"kind":"launcher_edit","request":{"app_id":"dev.tessera.Test","title":"Install Launcher","name":"Cool App","editable_name":true,"target":null,"icon_label":"cool-app","modal":false,"parent_window":null}}}' \
+  | ./target/debug/atrium-portal-prompter; echo
 ```
 
 The notification daemon is a long-lived stream process instead of a
 one-shot dialog: start it with `--notification-daemon` and write
-newline-delimited commands (the `aegis_portal_prompter::notify`
+newline-delimited commands (the `atrium_portal_prompter::notify`
 protocol) to its standard input:
 
 ```bash
-printf '%s\n' '{"v":2,"cmd":{"kind":"notify","app_id":"dev.aegis.Test","id":"n1","title":"Build finished","body":"","priority":"normal","default_action":null,"buttons":[],"expire_hint":10}}' \
-  | ./target/debug/aegis-portal-prompter --notification-daemon
+printf '%s\n' '{"v":2,"cmd":{"kind":"notify","app_id":"dev.tessera.Test","id":"n1","title":"Build finished","body":"","priority":"normal","default_action":null,"buttons":[],"expire_hint":10}}' \
+  | ./target/debug/atrium-portal-prompter --notification-daemon
 ```
 
 File chooser requests also accept `open_directory` and `save_files` (the
@@ -166,12 +166,12 @@ When accepting UI updates for portal dialogs, verify the following:
 
 ### Headless End-to-End Tests
 
-The integration suite under `crates/xdg-desktop-portal-aegis/tests/`
+The integration suite under `crates/xdg-desktop-portal-atrium/tests/`
 spawns the real daemon on a private D-Bus session and swaps the prompter
 for a pipe-compatible fake, so no display participates:
 
 ```bash
-AEGIS_PORTAL_REQUIRE_E2E=1 cargo test -p xdg-desktop-portal-aegis
+ATRIUM_PORTAL_REQUIRE_E2E=1 cargo test -p xdg-desktop-portal-atrium
 ```
 
 The fake prompter records every request the daemon issues as
@@ -192,7 +192,7 @@ pane's state machine (hide for non-images, request-and-await one decode
 per file, cache revisit) with real PNG fixtures the tests generate:
 
 ```bash
-cargo test -p aegis-portal-prompter
+cargo test -p atrium-portal-prompter
 ```
 
 They need no Wayland display, compositor, or D-Bus session (the lens
@@ -208,7 +208,7 @@ uploaded` debug line.
 
 To verify buttons and keyboard interaction in the real lens dialog (not
 just rendering), drive it through the compositor's Agent Interaction
-Domain (`aegis-mcp serve`, see the Aegis repository's `aegis-mcp`
+Domain (`tessera-mcp serve`, see the Tessera repository's `tessera-mcp`
 reference): launch the prompter from the direct setup, transfer its
 window into the domain with `interaction_domain_transfer_window`, then
 cycle `interaction_domain_observe` → `interaction_domain_input` batches
@@ -223,8 +223,8 @@ and the next input batch.
 
 ## Compositor Chrome Tests
 
-Chrome pickers render inside the compositor, so they need a live Aegis
-session; there is no headless substitute in this repository. The Aegis
+Chrome pickers render inside the compositor, so they need a live Tessera
+session; there is no headless substitute in this repository. The Tessera
 repository covers the picker rendering itself with offscreen-canvas
 tests — these setups validate that the *request path* reaches the chrome
 and that the answer flows back.
@@ -232,14 +232,14 @@ and that the answer flows back.
 ### Full-Stack Manual Tests
 
 Run the daemon on a private bus to keep the session clean, with
-`AEGIS_PORTAL_PROMPTER` pointing at a debug prompter (the daemon locates
+`ATRIUM_PORTAL_PROMPTER` pointing at a debug prompter (the daemon locates
 the prompter through that variable, see `prompter.rs`):
 
 ```bash
 dbus-daemon --session --nofork --print-address=1 > /tmp/bus.addr &
 export DBUS_SESSION_BUS_ADDRESS=$(cat /tmp/bus.addr)
-AEGIS_PORTAL_PROMPTER=$PWD/target/debug/aegis-portal-prompter \
-  RUST_LOG=info ./target/debug/xdg-desktop-portal-aegis &
+ATRIUM_PORTAL_PROMPTER=$PWD/target/debug/atrium-portal-prompter \
+  RUST_LOG=info ./target/debug/xdg-desktop-portal-atrium &
 ```
 
 The daemon still connects to the running compositor's IPC socket for
@@ -253,43 +253,43 @@ calls and interact with the window:
 
 ```bash
 # Prompter: file browser and confirmation dialog
-gdbus call --session -d org.freedesktop.impl.portal.desktop.aegis \
+gdbus call --session -d org.freedesktop.impl.portal.desktop.atrium \
   -o /org/freedesktop/portal/desktop \
   -m org.freedesktop.impl.portal.FileChooser.OpenFile \
   '/org/freedesktop/portal/desktop/request/gdbus/t1' \
-  'dev.aegis.Test' '' 'Open File' {}
+  'dev.tessera.Test' '' 'Open File' {}
 
-gdbus call --session -d org.freedesktop.impl.portal.desktop.aegis \
+gdbus call --session -d org.freedesktop.impl.portal.desktop.atrium \
   -o /org/freedesktop/portal/desktop \
   -m org.freedesktop.impl.portal.Account.GetUserInformation \
   '/org/freedesktop/portal/desktop/request/gdbus/t2' \
-  'dev.aegis.Test' '' "{'reason': <'smoke'>}"
+  'dev.tessera.Test' '' "{'reason': <'smoke'>}"
 ```
 
 The save dialog — the download-location prompt — is `SaveFile` with a
 suggested name:
 
 ```bash
-gdbus call --session -d org.freedesktop.impl.portal.desktop.aegis \
+gdbus call --session -d org.freedesktop.impl.portal.desktop.atrium \
   -o /org/freedesktop/portal/desktop \
   -m org.freedesktop.impl.portal.FileChooser.SaveFile \
   '/org/freedesktop/portal/desktop/request/gdbus/t5' \
-  'dev.aegis.Test' '' 'Save Download' {'current_name': <'report.pdf'>}
+  'dev.tessera.Test' '' 'Save Download' {'current_name': <'report.pdf'>}
 ```
 
 ```bash
 # Compositor chrome: region picker and crosshair pixel picker
-gdbus call --session -d org.freedesktop.impl.portal.desktop.aegis \
+gdbus call --session -d org.freedesktop.impl.portal.desktop.atrium \
   -o /org/freedesktop/portal/desktop \
   -m org.freedesktop.impl.portal.Screenshot.Screenshot \
   '/org/freedesktop/portal/desktop/request/gdbus/t3' \
-  'dev.aegis.Test' '' "{'interactive': <true>}"
+  'dev.tessera.Test' '' "{'interactive': <true>}"
 
-gdbus call --session -d org.freedesktop.impl.portal.desktop.aegis \
+gdbus call --session -d org.freedesktop.impl.portal.desktop.atrium \
   -o /org/freedesktop/portal/desktop \
   -m org.freedesktop.impl.portal.Screenshot.PickColor \
   '/org/freedesktop/portal/desktop/request/gdbus/t4' \
-  'dev.aegis.Test' '' {}
+  'dev.tessera.Test' '' {}
 ```
 
 The ScreenCast picker requires the session dance before the compositor
@@ -297,19 +297,19 @@ chrome appears at `SelectSources`. The session handle is the second
 argument to both calls:
 
 ```bash
-gdbus call --session -d org.freedesktop.impl.portal.desktop.aegis \
+gdbus call --session -d org.freedesktop.impl.portal.desktop.atrium \
   -o /org/freedesktop/portal/desktop \
   -m org.freedesktop.impl.portal.ScreenCast.CreateSession \
   '/org/freedesktop/portal/desktop/request/gdbus/s1' \
   '/org/freedesktop/portal/desktop/session/gdbus/s1' \
-  'dev.aegis.Test' {}
+  'dev.tessera.Test' {}
 
-gdbus call --session -d org.freedesktop.impl.portal.desktop.aegis \
+gdbus call --session -d org.freedesktop.impl.portal.desktop.atrium \
   -o /org/freedesktop/portal/desktop \
   -m org.freedesktop.impl.portal.ScreenCast.SelectSources \
   '/org/freedesktop/portal/desktop/request/gdbus/s2' \
   '/org/freedesktop/portal/desktop/session/gdbus/s1' \
-  'dev.aegis.Test' {}
+  'dev.tessera.Test' {}
 ```
 
 Each impl method returns its `(response, results)` tuple once the dialog
@@ -318,7 +318,7 @@ call `Close` on the request handle from a second shell while the dialog
 is open:
 
 ```bash
-gdbus call --session -d org.freedesktop.impl.portal.desktop.aegis \
+gdbus call --session -d org.freedesktop.impl.portal.desktop.atrium \
   -o /org/freedesktop/portal/desktop/request/gdbus/t1 \
   -m org.freedesktop.impl.portal.Request.Close
 ```

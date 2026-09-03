@@ -19,16 +19,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "aegis-pam"
+name = "atrium-pam"
 version = "0.0.27"
 dependencies = [
- "aegis-portal-secret",
+ "atrium-portal-secret",
  "libc",
  "zeroize",
 ]
 
 [[package]]
-name = "aegis-portal-ipc"
+name = "atrium-portal-ipc"
 version = "0.0.27"
 dependencies = [
  "libc",
@@ -38,7 +38,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "aegis-portal-prompter"
+name = "atrium-portal-prompter"
 version = "0.0.27"
 dependencies = [
  "env_logger",
@@ -57,7 +57,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "aegis-portal-runtime"
+name = "atrium-portal-runtime"
 version = "0.0.27"
 dependencies = [
  "async-channel",
@@ -66,10 +66,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "aegis-portal-secret"
+name = "atrium-portal-secret"
 version = "0.0.27"
 dependencies = [
- "aegis-portal-runtime",
+ "atrium-portal-runtime",
  "async-channel",
  "credential-client",
  "credential-core",
@@ -2239,13 +2239,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "xdg-desktop-portal-aegis"
+name = "xdg-desktop-portal-atrium"
 version = "0.0.27"
 dependencies = [
- "aegis-portal-ipc",
- "aegis-portal-prompter",
- "aegis-portal-runtime",
- "aegis-portal-secret",
+ "atrium-portal-ipc",
+ "atrium-portal-prompter",
+ "atrium-portal-runtime",
+ "atrium-portal-secret",
  "argon2",
  "async-channel",
  "chacha20poly1305",

@@ -1,12 +1,12 @@
 # Compatibility Reference
 
-Portal and Aegis use independent release sequences. The current Portal
-line implements the required Aegis IPC wire subset inside the
-Portal-owned `aegis-portal-ipc` crate. Compatibility is defined by the wire
-protocol and verified Aegis protocol schemas; it is not a Cargo source
+Portal and Tessera use independent release sequences. The current Portal
+line implements the required Tessera IPC wire subset inside the
+Portal-owned `atrium-portal-ipc` crate. Compatibility is defined by the wire
+protocol and verified Tessera protocol schemas; it is not a Cargo source
 dependency.
 
-| Portal line | Aegis runtime | IPC protocol | Aegis build dependency |
+| Portal line | Tessera runtime | IPC protocol | Tessera build dependency |
 |-------------|---------------|--------------|------------------------|
 | `v0.0.11`–`v0.0.18` | `v0.0.16`–`v0.0.21` (29); `v0.0.15` (25); `v0.0.11`–`v0.0.14` (24) | 29, negotiates down to 24 | None |
 | `v0.0.10` | `v0.0.16`–`v0.0.21` (27); `v0.0.15` (25); `v0.0.11`–`v0.0.14` (24) | 25, negotiates down to 24 | None |
@@ -20,10 +20,10 @@ dependency.
 | `v0.0.2` | `v0.0.11` | 24 | Exact tagged Git crates |
 | `v0.0.1` | `v0.0.9` | Release-specific | Exact tagged Git crates |
 
-Portal `v0.0.11` and later build and test without an Aegis checkout. The
+Portal `v0.0.11` and later build and test without a Tessera checkout. The
 committed
-`Cargo.lock` contains no package from the Aegis repository. A production
-installation still needs a running Aegis compositor because Settings,
+`Cargo.lock` contains no package from the Tessera repository. A production
+installation still needs a running Tessera compositor because Settings,
 Screenshot, color and target selection, ScreenCast, and Wallpaper consume
 compositor-owned resources.
 
@@ -41,8 +41,8 @@ connector-addressed stream targets, stream cursor mode,
 (see [ADR-0015](../adr/0015-protocol-29-projection.md)). Wallpaper uses the
 compositor's path-based `SetWallpaper`
 op, which the compositor has spoken since protocol 17 — before this
-projection's floor — so it works against every listed Aegis release (see
-[ADR-0011](../adr/0011-wallpaper-wire-reconciliation.md)). A future Aegis
+projection's floor — so it works against every listed Tessera release (see
+[ADR-0011](../adr/0011-wallpaper-wire-reconciliation.md)). A future Tessera
 release is compatible when it preserves protocol 24.
 
 Only Settings, Screenshot, ScreenCast, and Wallpaper require compositor

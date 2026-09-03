@@ -1,11 +1,11 @@
-# Aegis IPC Wire Protocol
+# Tessera IPC Wire Protocol
 
-The Portal-owned `aegis-portal-ipc` crate projects Aegis IPC for
+The Portal-owned `atrium-portal-ipc` crate projects Tessera IPC for
 compositor-owned portal resources only: settings, capture, picking,
 streams, and wallpaper. This page summarizes the wire contract for lookup;
-the field-level truth is `crates/aegis-portal-ipc/src/schema.rs`, pinned
+the field-level truth is `crates/atrium-portal-ipc/src/schema.rs`, pinned
 by literal JSON fixtures and exercised against the independent test server
-in `crates/aegis-portal-ipc/src/testing.rs`. Decision history lives in
+in `crates/atrium-portal-ipc/src/testing.rs`. Decision history lives in
 [ADR-0004](../adr/0004-portal-ownership-and-runtime-ipc-boundary.md),
 [ADR-0005](../adr/0005-screencast-dmabuf-slot-protocol.md),
 [ADR-0006](../adr/0006-shm-consumers-switch-to-readback-transport.md),
@@ -16,7 +16,7 @@ lives in the [Compatibility Reference](compatibility.md).
 
 ## Protocol Versions
 
-| Version | Adds | Released Aegis implementing it |
+| Version | Adds | Released Tessera implementing it |
 |---------|------|--------------------------------|
 | 24 | Base op set below | `v0.0.11`–`v0.0.14` |
 | 25 | Zero-copy dmabuf slot streams | `v0.0.15` |
@@ -27,7 +27,7 @@ The handshake asks for protocol 29 (`PROTOCOL_VERSION`) and accepts a
 downgrade to 24 (`MIN_PROTOCOL_VERSION`); version-gated features key off
 the negotiated version. Protocols 26–28 exist upstream but are
 deliberately not projected: no Portal interface needs them (ADR-0011).
-The connection scope is `aegis-portal`.
+The connection scope is `atrium-portal`.
 
 ## Operations
 
@@ -70,15 +70,15 @@ restarts it (`StreamOutputStop` + `StreamOutputStart`).
 
 ## Source of Truth
 
-- `crates/aegis-portal-ipc/src/schema.rs` — wire types and the
+- `crates/atrium-portal-ipc/src/schema.rs` — wire types and the
   version-gating constants; its unit tests pin literal v24/v25/v29
   fixtures.
   The wallpaper fixtures were derived by serializing the compositor's own
   schema types and are pinned in both directions
   (`{"type":"SetWallpaper","path":...}` ↔ `{"type":"WallpaperSet"}`).
-- `crates/aegis-portal-ipc/tests/` — stream-frame and wallpaper
+- `crates/atrium-portal-ipc/tests/` — stream-frame and wallpaper
   conformance tests against the independent server, whose wallpaper
   dispatch mirrors the real gates (control, live lease, explicit scope
   op, valid path, active session).
-- `crates/aegis-portal-ipc/src/testing.rs` — the minimal independent test
+- `crates/atrium-portal-ipc/src/testing.rs` — the minimal independent test
   server; tests never import the compositor's implementation.

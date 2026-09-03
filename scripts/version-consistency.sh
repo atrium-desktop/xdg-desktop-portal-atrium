@@ -5,8 +5,8 @@
 #
 # Sources of truth:
 #   Cargo.toml workspace.package.version
-#   aegis-portal-ipc PROTOCOL_VERSION / MIN_PROTOCOL_VERSION
-#   aegis-portal-prompter PROCESS_CONTRACT_VERSION
+#   atrium-portal-ipc PROTOCOL_VERSION / MIN_PROTOCOL_VERSION
+#   atrium-portal-prompter PROCESS_CONTRACT_VERSION
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -46,7 +46,7 @@ if [ "$unreleased_base" != "$cargo_version" ]; then
 fi
 
 # ---- IPC protocol numbers <-> prose --------------------------------------
-schema="$repo/crates/aegis-portal-ipc/src/schema.rs"
+schema="$repo/crates/atrium-portal-ipc/src/schema.rs"
 proto=$(sed -n 's/^pub const PROTOCOL_VERSION: u32 = \([0-9]*\);$/\1/p' "$schema")
 proto_min=$(sed -n 's/^pub const MIN_PROTOCOL_VERSION: u32 = \([0-9]*\);$/\1/p' "$schema")
 if [ -z "$proto" ] || [ -z "$proto_min" ]; then
@@ -71,8 +71,8 @@ check_doc_protocol "$repo/docs/reference/compatibility.md"
 
 # Any *older* protocol offered as the current one is stale prose.
 for f in "$repo/README.md" "$repo/docs/reference/compatibility.md"; do
-    if grep -q 'narrow projection of Aegis IPC (protocol [0-9]*' "$f"; then
-        stated=$(sed -n 's/.*narrow projection of Aegis IPC (protocol \([0-9]*\).*/\1/p' \
+    if grep -q 'narrow projection of Tessera IPC (protocol [0-9]*' "$f"; then
+        stated=$(sed -n 's/.*narrow projection of Tessera IPC (protocol \([0-9]*\).*/\1/p' \
             "$f" | head -n 1)
         if [ "$stated" != "$proto" ]; then
             fail "$f states IPC protocol $stated in the summary, code says $proto"
@@ -88,7 +88,7 @@ for f in "$repo/README.md" "$repo/docs/reference/compatibility.md"; do
 done
 
 # ---- prompter contract <-> smoke-test payloads ---------------------------
-contract_lib="$repo/crates/aegis-portal-prompter/src/lib.rs"
+contract_lib="$repo/crates/atrium-portal-prompter/src/lib.rs"
 contract=$(sed -n 's/^pub const PROCESS_CONTRACT_VERSION: u32 = \([0-9]*\);$/\1/p' \
     "$contract_lib")
 if [ -z "$contract" ]; then

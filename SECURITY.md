@@ -8,7 +8,7 @@ older releases are not patched.
 ## Reporting a Vulnerability
 
 Report vulnerabilities privately through the GitHub security advisories of
-[aegis-shell/xdg-desktop-portal-aegis](https://github.com/aegis-shell/xdg-desktop-portal-aegis/security/advisories)
+[aegis-shell/xdg-desktop-portal-atrium](https://github.com/aegis-shell/xdg-desktop-portal-atrium/security/advisories)
 ("Report a vulnerability"). Do not open a public issue for an unpatched
 vulnerability. When a private advisory is unavailable, open a public issue
 describing only the affected component, without exploit details.
@@ -40,7 +40,7 @@ ciphertext are mode 0600, files are opened with `O_NOFOLLOW`, and writes
 are atomic. Symlinks, unexpected owners, unsafe modes, oversized input,
 orphan ciphertext, and malformed encryption are startup errors: the
 daemon fails closed rather than recovering from a suspect vault
-(`crates/aegis-portal-secret/src/vault.rs`).
+(`crates/atrium-portal-secret/src/vault.rs`).
 
 Per-application secrets are HKDF-SHA256-derived from the master key on
 demand and are never stored; an application that learns its own value
@@ -48,8 +48,8 @@ cannot derive another application's value from it.
 
 ### PAM Token Handoff
 
-With the optional PAM module enabled, `pam_aegis.so` hands vault-unlock
-material to the portal through `/run/user/<uid>/aegis-pam-token` (mode
+With the optional PAM module enabled, `pam_atrium.so` hands vault-unlock
+material to the portal through `/run/user/<uid>/atrium-pam-token` (mode
 0600) so the portal can unlock a password-mode vault without prompting.
 The token is planted only once the login is confirmed: `authenticate`
 stashes the password in PAM module data, and the first committing
@@ -66,8 +66,8 @@ vault unlocks itself from `vault.key`, so no token is planted at all;
 other layouts keep the legacy raw-password plant. The daemon accepts both
 formats, but the `aegis-key-v1:` prefix commits: malformed key material
 fails closed rather than falling through to the password path
-(`crates/aegis-pam/src/lib.rs`,
-`crates/aegis-portal-secret/src/lib.rs`).
+(`crates/atrium-pam/src/lib.rs`,
+`crates/atrium-portal-secret/src/lib.rs`).
 
 Either form remains secret material in a same-uid-readable file: until
 the portal consumes it, any same-uid process can read it. Consumption is
@@ -85,7 +85,7 @@ Wayland text-input layer: iris enables text input per surface, so there is
 no per-field content purpose marking the field as a password. The prompt
 itself masks the rendered text and the IME preedit, but a compositor-side
 input method observes the committed text. This limitation is documented in
-`crates/aegis-portal-prompter/src/ui/edit.rs` and lifting it requires an
+`crates/atrium-portal-prompter/src/ui/edit.rs` and lifting it requires an
 optics release.
 
 ### Process and Memory Boundaries
@@ -115,17 +115,17 @@ optics release.
   can still reach swap. Credential buffers are zeroized on drop, which
   bounds but does not eliminate exposure.
 - The backend spawns one prompter process per interactive request, and the
-  child inherits the backend's environment. The `AEGIS_PORTAL_PROMPTER`
+  child inherits the backend's environment. The `ATRIUM_PORTAL_PROMPTER`
   environment variable overrides the prompter binary path, so any same-uid
   process that controls the backend's environment can substitute the
   prompt UI. Prompter responses are validated against the exact request
   before they become portal results, but this validates shape, not intent.
 - Compositor capture payloads travel as sealed memfds; the portal trusts
   the compositor it negotiates with and applies the scoped
-  `aegis-portal` capability set
-  (`crates/aegis-portal-ipc/src/schema.rs`). Wallpaper images are not
+  `atrium-portal` capability set
+  (`crates/atrium-portal-ipc/src/schema.rs`). Wallpaper images are not
   payloads: the portal stages them at
-  `$XDG_RUNTIME_DIR/aegis-portal/wallpaper/` (directory 0700, file 0600,
+  `$XDG_RUNTIME_DIR/atrium-portal/wallpaper/` (directory 0700, file 0600,
   atomic replace, wiped at startup) and the compositor reads the staged
   path — a same-uid artifact like everything else in the runtime
   directory.

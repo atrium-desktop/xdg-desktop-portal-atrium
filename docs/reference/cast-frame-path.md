@@ -12,7 +12,7 @@ and [ADR-0016](../adr/0016-screencast-runtime-protocol-29.md).
 
 | Concern | Owner |
 |---------|-------|
-| Frame rate, capture, scanout exclusion, damage | Aegis compositor |
+| Frame rate, capture, scanout exclusion, damage | Tessera compositor |
 | Transport selection, buffer pools, PipeWire pacing | This backend |
 | Pixel format conversion (e.g. to NV12), frame duplication | Consumer |
 

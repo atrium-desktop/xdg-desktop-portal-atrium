@@ -1,0 +1,33 @@
+[package]
+name = "atrium-portal-prompter"
+description = "Out-of-process native prompt surfaces for xdg-desktop-portal-atrium"
+readme = "README.md"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+env_logger = { workspace = true }
+flux-sys = { workspace = true }
+image = { workspace = true }
+iris = { workspace = true }
+iris-sys = { workspace = true }
+lens = { workspace = true }
+lens-sys = { workspace = true }
+libc = { workspace = true }
+log = { workspace = true }
+mime_guess = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
+
+[lib]
+name = "atrium_portal_prompter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atrium-portal-prompter"
+path = "src/main.rs"

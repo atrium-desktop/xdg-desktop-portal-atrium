@@ -1,0 +1,23 @@
+[package]
+name = "atrium-portal-ipc"
+description = "Narrow Tessera IPC v29 client and contract tests for compositor-owned portal resources"
+readme = "README.md"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
+
+[features]
+test-server = []
+
+[lib]
+name = "atrium_portal_ipc"
+path = "src/lib.rs"

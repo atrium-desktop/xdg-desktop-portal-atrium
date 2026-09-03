@@ -12,17 +12,17 @@
    - `Cargo.toml` workspace version ↔ `meson.build` version ↔ the newest
      `CHANGELOG.md` release heading and link refs,
    - `README.md` and `docs/reference/compatibility.md` protocol numbers ↔
-     `aegis-portal-ipc`'s `PROTOCOL_VERSION`/`MIN_PROTOCOL_VERSION`,
+     `atrium-portal-ipc`'s `PROTOCOL_VERSION`/`MIN_PROTOCOL_VERSION`,
    - `docs/dev/portal-ui-testing.md` payload versions ↔
-     `aegis-portal-prompter`'s `PROCESS_CONTRACT_VERSION`,
+     `atrium-portal-prompter`'s `PROCESS_CONTRACT_VERSION`,
    - `docs/dev/documentation/` is never modified by a code change
      (governance firewall, see `AGENTS.md`).
 
 ## Canonical Dependency State
 
 1. Resolve the workspace with `--locked` from a clean checkout.
-2. Confirm that `Cargo.lock` and `cargo tree --workspace` contain no Aegis Git
-   source or internal Aegis crate.
+2. Confirm that `Cargo.lock` and `cargo tree --workspace` contain no Tessera Git
+   source or internal Tessera crate.
 3. Run the independent IPC fixtures and daemon-level media tests.
 4. Confirm that the runtime protocol mapping matches the
    [Compatibility Reference](../reference/compatibility.md).
@@ -36,8 +36,8 @@ cargo fmt --all -- --check
 cargo +1.88.0 check --locked --workspace --all-targets
 cargo +1.88.0 clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets -- -D warnings
-AEGIS_PORTAL_REQUIRE_E2E=1 \
-AEGIS_PORTAL_REQUIRE_PIPEWIRE_E2E=1 \
+ATRIUM_PORTAL_REQUIRE_E2E=1 \
+ATRIUM_PORTAL_REQUIRE_PIPEWIRE_E2E=1 \
   cargo test --locked --workspace
 cargo deny check
 cargo doc --locked --workspace --no-deps
@@ -72,6 +72,6 @@ distribution license before publishing artifacts.
 1. Move the `CHANGELOG.md` Unreleased entries into the release version and
    date.
 2. Update the workspace and Meson project versions together.
-3. Update the compatibility table when the verified Aegis runtime set or IPC
+3. Update the compatibility table when the verified Tessera runtime set or IPC
    protocol changes.
 4. Tag only the reviewed canonical-lockfile commit.

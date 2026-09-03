@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.freedesktop.impl.portal.desktop.atrium
+Exec=@libexecdir@/xdg-desktop-portal-atrium

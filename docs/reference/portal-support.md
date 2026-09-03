@@ -2,7 +2,7 @@
 
 ## Native Interfaces
 
-| Backend interface | Contract level | Aegis behavior |
+| Backend interface | Contract level | Tessera behavior |
 |-------------------|----------------|----------------|
 | `org.freedesktop.impl.portal.Settings` | Version 1 | Compositor-owned appearance and input settings |
 | `org.freedesktop.impl.portal.Screenshot` | Version 3 | Area target, color picking, and consent-checked legacy output capture |
@@ -19,7 +19,7 @@
 | `org.freedesktop.impl.portal.DynamicLauncher` | Version 1 | Portal-owned install-confirmation dialog with name editing (the icon is echoed verbatim, never edited); install tokens are never issued; Application and Webapp types |
 | `org.freedesktop.impl.portal.Inhibit` | Version 3 | logind-backed idle/suspend inhibition in `block` mode; logout and user-switch are tracked no-ops; monitors get one `StateChanged` (Running), and `QueryEndResponse` is an acknowledged no-op |
 | `org.freedesktop.impl.portal.Notification` | Version 2 | Portal-owned notification daemon window stacking cards (text and buttons only; icons, sounds, and action targets ignored); low/normal priority auto-dismisses after 5/10 seconds, high/urgent persists |
-| `org.freedesktop.impl.portal.Wallpaper` | Version 1 | Local `file://` images up to 64 MiB, optional textual preview confirmation; the image is staged at `$XDG_RUNTIME_DIR/aegis-portal/wallpaper/current.<ext>` (directory 0700, file 0600, atomic replace, kept after a successful swap) and applied through the compositor's path-based `SetWallpaper` op, which every supported compositor speaks; `set-on` is validated but not forwarded (single compositor wallpaper) |
+| `org.freedesktop.impl.portal.Wallpaper` | Version 1 | Local `file://` images up to 64 MiB, optional textual preview confirmation; the image is staged at `$XDG_RUNTIME_DIR/atrium-portal/wallpaper/current.<ext>` (directory 0700, file 0600, atomic replace, kept after a successful swap) and applied through the compositor's path-based `SetWallpaper` op, which every supported compositor speaks; `set-on` is validated but not forwarded (single compositor wallpaper) |
 | `org.freedesktop.impl.portal.Print` | Version 3 | `PreparePrint` echoes settings and page setup with a fresh token; `Print` spools to a private temp file and submits to the default printer through the system `lp` client |
 
 `FileChooser`, `Email`, and `Account` do not define a backend `version`
@@ -30,7 +30,7 @@ the local frontend contract level it implements.
 ## Unserved Interfaces
 
 Every interface the routing configuration names is served natively by
-Aegis; the default route is `aegis` alone and no fallback backend is
+Tessera; the default route is `tessera` alone and no fallback backend is
 installed or required. Interfaces with no backend in this stack —
 Camera, RemoteDesktop, GlobalShortcuts, InputCapture, USB, Location, and
 Documents — are not advertised, and the portal frontend fails requests for
@@ -40,7 +40,7 @@ them cleanly.
 
 | Component | Purpose |
 |-----------|---------|
-| Aegis IPC protocol 29 (negotiates down to 24) | Compositor settings, screenshot capture and selection, capture consent, ScreenCast frames, and wallpaper application |
+| Tessera IPC protocol 29 (negotiates down to 24) | Compositor settings, screenshot capture and selection, capture consent, ScreenCast frames, and wallpaper application |
 | `xdg-desktop-portal` | Public portal frontend |
 | Optics (flux, lens, iris) shared libraries | All prompter UI processes, from the tagged `ming2k/optics` release |
 | PipeWire and WirePlumber | ScreenCast transport and routing |
@@ -61,7 +61,7 @@ SPA 0.2 development ABI. The Ubuntu baseline is tested with Rust 1.88, the
 minimum supported Rust version. Compatible newer releases remain supported
 through their stable ABIs.
 
-See the [Compatibility Reference](compatibility.md) for the Aegis releases
+See the [Compatibility Reference](compatibility.md) for the Tessera releases
 whose wire schemas are verified by the current Portal line.
 
 ## Persistent State
@@ -71,7 +71,7 @@ The default vault directory is
 `XDG_DATA_HOME` is unset.
 
 ScreenCast `persist_mode` 1 restore tokens live in
-`$XDG_DATA_HOME/aegis-portal/screencast-restore.json` (directory `0700`,
+`$XDG_DATA_HOME/atrium-portal/screencast-restore.json` (directory `0700`,
 file `0600`, atomic replace). Each entry binds an opaque 128-bit token to
 one application's stored monitor selection (whole desktop or one
 connector) and cursor mode. Delete the file to revoke every persisted

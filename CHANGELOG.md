@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+> **Project rename.** The portal formerly known as
+> **xdg-desktop-portal-aegis** was renamed to
+> **xdg-desktop-portal-atrium**. The compositor it pairs with was renamed
+> from **Aegis** to **Tessera**. Entries below use the new names; historical
+> entries retain the original identifiers. The GitHub repository moved from
+> `atrium-desktop/xdg-desktop-portal-aegis` to
+> `atrium-desktop/xdg-desktop-portal-atrium`. Environment variables use the
+> `ATRIUM_PORTAL_*` prefix (previously `AEGIS_PORTAL_*`). The D-Bus backend
+> name is now `org.freedesktop.impl.portal.desktop.atrium`. On-disk vault
+> paths (`aegis/secrets/`, `aegis-key-v1:`) are unchanged for compatibility.
+
 ## [Unreleased]
 
 ## [0.0.27] - 2026-08-30
