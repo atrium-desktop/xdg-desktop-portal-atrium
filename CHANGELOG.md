@@ -696,7 +696,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.26...HEAD
+[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.27...HEAD
+[0.0.27]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.27
 [0.0.26]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.26
 [0.0.25]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.25
 [0.0.24]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.24
