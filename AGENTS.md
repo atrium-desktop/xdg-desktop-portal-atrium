@@ -29,22 +29,10 @@ the same boundary ([ADR-0020](docs/adr/0020-secret-vault-delegation-to-sigil.md)
 - Test both contracts with literal wire fixtures and Portal-owned fakes;
   never import sigil or arca implementation code into tests.
 
-The prompter UI builds on the optics stack (iris/lens), resolved from the
-tagged `ming2k/optics` release — an independent third repository, so the
-rules above do not cover it. For joint development against a sibling optics
-checkout:
-
-- Enable local mode with `cp .cargo/optics-local.toml .cargo/config.toml`.
-  The generated `.cargo/config.toml` is Git-ignored; keep it that way.
-- Leave `Cargo.lock` in the state the local patch produces while local mode
-  is active; do not commit the path-resolved lockfile.
-- Promote an Optics release by bumping every tagged dependency in
-  `Cargo.toml` together and regenerating the canonical lockfile; keep
-  `scripts/optics-release-ref.sh`'s expected package count in sync.
-- `atrium-portal-prompter/build.rs` re-emits the `-sys` crates' rpath
-  metadata so the binary finds the chosen liblens/libflux/libiris at
-  runtime; the direct `flux-sys`/`iris-sys`/`lens-sys` dependencies exist
-  only to make that metadata visible — do not prune them.
+Per [ADR-0021](docs/adr/0021-headless-portal-and-optics-retirement.md), the
+portal is 100% headless and has zero optics dependencies. All user-facing UI
+prompts are delegated to companion runtime components (sigil, arca, tessera).
+Do not re-introduce GUI or optics dependencies into this repository.
 
 ## Testing Rules & AI Behavioral Boundaries
 - **Runner Tool**: Always use `cargo nextest run` instead of `cargo test` for unit and integration tests. Use `cargo test --doc` only when verifying documentation tests.

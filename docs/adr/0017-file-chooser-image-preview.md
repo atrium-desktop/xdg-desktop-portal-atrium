@@ -1,6 +1,6 @@
 # ADR-0017: The FileChooser previews images in the prompter
 
-- Status: Accepted
+- Status: Superseded by [ADR-0021](0021-headless-portal-and-optics-retirement.md)
 - Date: 2026-08-19
 
 ## Context

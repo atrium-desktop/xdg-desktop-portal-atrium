@@ -53,16 +53,13 @@ if [ "$build" = yes ]; then
     cargo build \
         --manifest-path "$repo/Cargo.toml" \
         --locked --release \
-        -p xdg-desktop-portal-atrium \
-        -p atrium-portal-prompter
+        -p xdg-desktop-portal-atrium
 fi
 target=$repo/target/release
 
 stage=${DESTDIR:-}
 install -Dm755 "$target/xdg-desktop-portal-atrium" \
     "$stage$libexec/xdg-desktop-portal-atrium"
-install -Dm755 "$target/atrium-portal-prompter" \
-    "$stage$libexec/atrium-portal-prompter"
 
 # The D-Bus activation Exec path is resolved through the *final* prefix,
 # never through DESTDIR, or the session bus would try to launch the file
@@ -83,7 +80,6 @@ install -Dm644 "$repo/contrib/xdg-desktop-portal/atrium-portals.conf" \
 printf 'installed:\n'
 printf '  %s\n' \
     "$libexec/xdg-desktop-portal-atrium" \
-    "$libexec/atrium-portal-prompter" \
     "$data/dbus-1/services/org.freedesktop.impl.portal.desktop.atrium.service" \
     "$data/xdg-desktop-portal/portals/atrium.portal" \
     "$data/xdg-desktop-portal/atrium-portals.conf"

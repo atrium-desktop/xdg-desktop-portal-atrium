@@ -39,9 +39,7 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# The optics Rust bindings (iris/lens and their -sys crates) come from the
-# tagged monorepo release.
-allow-git = ["https://github.com/ming2k/optics"]
+allow-git = []
 
 [sources.allow-org]
 github = []

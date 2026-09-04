@@ -9,17 +9,15 @@ publishes ScreenCast streams
 through PipeWire and routes the per-application Secret portal to the
 sigil secret service.
 
-The repository builds a D-Bus-activated backend plus an optics (iris/lens)
-UI host from a small Cargo workspace:
+The repository builds a D-Bus-activated headless daemon from a small Cargo workspace:
 
 - `xdg-desktop-portal-atrium` assembles the backend interfaces, IPC adapters,
   and workers.
 - `atrium-portal-ipc` implements the settings, capture, picking, streaming,
   and wallpaper wire contract without depending on Tessera source crates.
-- `atrium-portal-prompter` runs one optics (iris/lens) interaction per
-  request. It owns file browsing, consent dialogs, the application chooser,
-  the launcher name editor, and Secret password input, and it hosts the
-  long-lived notification daemon. It never connects to compositor IPC.
+- `atrium-portal-prompter` defines the versioned, out-of-process data contract
+  for companion prompts (FileChooser via Arca, PickTarget/PickApp/PickConfirm
+  via Tessera).
 - `atrium-portal-runtime` owns the shared portal Request lifecycle.
 - `atrium-portal-secret` projects the native Secret backend onto the
   sigil daemon's IPC socket (ADR-0020); storage, unlock, and lock state
@@ -39,8 +37,8 @@ dependency; see the
 
 ## Build
 
-Install Rust, the optics C libraries (flux/lens/iris, from the tagged
-`ming2k/optics` release), and `pkg-config`, then run:
+Install Rust, PipeWire development libraries (`libpipewire-0.3-dev`,
+`libspa-0.2-dev`), and `pkg-config`, then run:
 
 ```bash
 cargo build --locked --release --workspace

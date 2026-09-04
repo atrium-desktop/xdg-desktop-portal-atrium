@@ -1,7 +1,6 @@
 # ADR-0008: Prompter dialogs on the optics (iris/lens) stack
 
-- Status: Accepted — retrospective record of the decision implemented in
-  workspace `v0.0.7`
+- Status: Superseded by [ADR-0021](0021-headless-portal-and-optics-retirement.md)
 - Date: 2026-08-10
 - Complements: [ADR-0004](0004-portal-ownership-and-runtime-ipc-boundary.md)
 

@@ -52,7 +52,7 @@ GStreamer PipeWire consumer is unavailable.
 Build and inspect the package:
 
 ```bash
-cargo build --locked --release -p xdg-desktop-portal-atrium -p atrium-portal-prompter
+cargo build --locked --release -p xdg-desktop-portal-atrium
 DESTDIR="$PWD/stage" ./scripts/install.sh --prefix /usr --no-build
 ```
 

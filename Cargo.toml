@@ -17,36 +17,13 @@ atrium-portal-secret = { version = "=0.0.28", path = "crates/atrium-portal-secre
 
 dirs = "5"
 env_logger = "0.11"
-# The FileChooser preview pane decodes image files in the prompter process
-# (ADR-0017): only raster decoders are enabled, never the full default
-# format set, so the decode surface stays small.
-image = { version = "0.25", default-features = false, features = [
-    "bmp",
-    "gif",
-    "jpeg",
-    "png",
-    "webp",
-] }
 # Everything below is inherited by more than one crate; deny.toml audits
 # the workspace table as the single pinning point, so member manifests
 # must not restate versions.
 async-channel = "2"
 rand = "0.8"
-# The canonical build resolves the optics binding sources from the tagged
-# monorepo release. Joint development against a sibling optics checkout uses
-# .cargo/optics-local.toml without making the sibling checkout mandatory for
-# CI (mirror of the Tessera workflow).
-iris = { git = "https://github.com/ming2k/optics", tag = "v0.0.32" }
-lens = { git = "https://github.com/ming2k/optics", tag = "v0.0.32" }
-# Direct -sys dependencies are how the terminal binary sees the
-# DEP_*_RPATHS metadata (published via the -sys crates' `links`) and can
-# re-emit the loader paths itself; see atrium-portal-prompter/build.rs.
-flux-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.32" }
-iris-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.32" }
-lens-sys = { git = "https://github.com/ming2k/optics", tag = "v0.0.32" }
 libc = "0.2"
 log = "0.4"
-mime_guess = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"

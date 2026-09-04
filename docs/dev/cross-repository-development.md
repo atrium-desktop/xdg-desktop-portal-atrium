@@ -29,21 +29,14 @@ Two further sibling repositories integrate at runtime as well
 | Portal UI | FileChooser, Account confirmation, Secret password input | Window parenting through standard Wayland protocols |
 | Runtime wire client | Protocol-29 projection and sealed-memfd receiver | Protocol server and authorization |
 | Compositor resources | Validation, persistence, PipeWire publication | Settings, pixels, target selection, capture consent, frame streams |
-| Source dependencies | Portal workspace crates, registry packages, and the tagged optics (iris/lens) bindings | No Portal build dependency |
+| Source dependencies | Portal workspace crates and registry packages | No Portal build dependency |
 
 Do not add Tessera internal crates, Git dependencies, or sibling path patches
 to this repository. A local Tessera checkout is optional and never changes
 Portal dependency resolution.
 
-## Optics Local Development
-
-The prompter UI builds on the optics stack (iris/lens), a third repository
-resolved from the tagged `ming2k/optics` release; the Tessera rules above do
-not cover it. To develop against a sibling optics checkout, copy
-`.cargo/optics-local.toml` to `.cargo/config.toml` (Git-ignored) and keep
-the path-resolved `Cargo.lock` state out of commits. Promote an optics
-release by bumping every tagged dependency in `Cargo.toml` together and
-regenerating the canonical lockfile.
+Per [ADR-0021](../adr/0021-headless-portal-and-optics-retirement.md), the portal
+is purely headless and has no optics dependencies.
 
 ## Daily Development
 

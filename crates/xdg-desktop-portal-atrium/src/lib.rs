@@ -20,18 +20,16 @@
 //! and `org.freedesktop.impl.portal.Wallpaper` v1,
 //! and `org.freedesktop.impl.portal.Print` at
 //! `/org/freedesktop/portal/desktop` under the well-known name
-//! `org.freedesktop.impl.portal.desktop.atrium`. Secret is backed by an
-//! encrypted at-rest vault. FileChooser launches one portal-owned optics
-//! (iris/lens) prompter process; no file data crosses compositor IPC. For
+//! `org.freedesktop.impl.portal.desktop.atrium`. Secret is delegated to the
+//! sigil daemon (ADR-0020). FileChooser launches the arca companion prompt
+//! binary; no file data crosses compositor IPC. For
 //! compositor-owned resources the backend is an ordinary scoped IPC client:
 //! pixels come from `CaptureOutput` under the built-in
 //! `atrium-portal` named scope with a sealed-memfd blob transfer
 //! transport, screencast frames arrive through the same scope's output-frame
 //! stream and are republished as a PipeWire producer stream. Account consent,
-//! the file chooser, password-mode vault unlock, and the app chooser
-//! (backed by the backend's own freedesktop desktop-file/mimeapps
-//! resolution, which also resolves and launches OpenURI targets) are
-//! Portal-owned UI and do not cross compositor IPC.
+//! password-mode vault unlock, and target picking are delegated to companion
+//! services (sigil, tessera) per ADR-0020 and ADR-0021.
 //! No Wayland capture protocol is added anywhere.
 //!
 //! The process uses zbus's blocking API on the session bus and plain

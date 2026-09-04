@@ -1,6 +1,6 @@
 # ADR-0014: The Prompter Privatizes Its Standard Output
 
-- Status: Accepted
+- Status: Superseded by [ADR-0021](0021-headless-portal-and-optics-retirement.md)
 - Date: 2026-08-16
 
 ## Context

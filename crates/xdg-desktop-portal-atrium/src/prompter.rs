@@ -1,5 +1,5 @@
-//! Supervision for one Portal-owned, one-shot optics (iris/lens) prompter
-//! process.
+//! Supervision for an out-of-process prompter process (such as
+//! arca --chooser-prompt, or a test fixture prompter).
 //!
 //! ## Lifetime and hang policy
 //!

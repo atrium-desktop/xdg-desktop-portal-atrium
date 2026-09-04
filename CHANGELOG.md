@@ -19,6 +19,12 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Headless portal architecture and Optics retirement (ADR-0021).** The portal
+  is now a 100% headless daemon. All user-facing prompt surfaces are delegated to
+  companion runtime components (FileChooser to Arca, Secret to Sigil, target
+  picking and confirmation to Tessera). The in-tree Optics UI implementation,
+  `.cargo/optics-local.toml`, and all optics dependencies (`flux`, `lens`,
+  `iris`) are retired from the workspace.
 - **Removed the Meson packaging layer.** The workspace is pure Rust, so
   `scripts/install.sh` now builds with Cargo and installs the two private
   executables, the generated D-Bus service file, and the portal metadata,
@@ -44,6 +50,9 @@ All notable changes to this project are documented in this file.
 
 ### Removed
 
+- The optics dependencies (`flux`, `flux-sys`, `lens`, `lens-sys`, `iris`,
+  `iris-sys`), `image`, and `mime_guess` workspace dependencies, along with
+  `.cargo/optics-local.toml` and `scripts/optics-release-ref.sh`.
 - The obsolete vault-related workspace dependencies (`argon2`,
   `chacha20poly1305`, `hkdf`, `sha2`) and the unused dev-dependencies of
   the backend crate.

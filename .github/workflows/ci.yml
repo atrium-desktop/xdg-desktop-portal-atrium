@@ -20,9 +20,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      # EmbarkStudios/cargo-deny-action always builds the latest cargo-deny
-      # (no version input), so install a pinned release instead. The
-      # --all-features flag keeps parity with that action's defaults.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.20.2
@@ -34,19 +31,9 @@ jobs:
   msrv:
     runs-on: ubuntu-24.04
     env:
-      # rust-toolchain.toml selects `stable`; RUSTUP_TOOLCHAIN outranks it so
-      # this job really runs the minimum supported toolchain below.
       RUSTUP_TOOLCHAIN: "1.88.0"
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve the locked Optics release
-        id: optics-release
-        run: echo "ref=$(scripts/optics-release-ref.sh)" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
-        with:
-          repository: ming2k/optics
-          path: optics
-          ref: ${{ steps.optics-release.outputs.ref }}
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: clippy
@@ -55,24 +42,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential libclang-dev \
-            libpipewire-0.3-dev libspa-0.2-dev pkg-config \
-            meson ninja-build glslang-tools \
-            libwayland-dev wayland-protocols libvulkan-dev \
-            libfreetype-dev libharfbuzz-dev libfontconfig1-dev \
-            libfribidi-dev libxkbcommon-dev python3-pip
-          # optics' meson.build requires >=1.8.0; Ubuntu 24.04's apt ships 1.3.2.
-          sudo python3 -m pip install --break-system-packages 'meson>=1.8'
-          # optics builds with c_std=c23; Ubuntu 24.04's GCC 13 has no
-          # c23 mode, so compile the C libraries with Clang.
-          sudo apt-get install -y clang
-      - name: Build and install optics C libraries
-        run: |
-          CC=clang CXX=clang++ meson setup optics/build optics \
-            -Dexamples=false -Dtests=false --buildtype=release
-          meson compile -C optics/build
-          sudo meson install -C optics/build
-          sudo ldconfig
-          pkg-config --modversion flux lens iris
+            libpipewire-0.3-dev libspa-0.2-dev pkg-config
       - name: Check minimum supported Rust
         run: cargo check --locked --workspace --all-targets
       - name: Lint with minimum supported Rust
@@ -82,17 +52,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve the locked Optics release
-        id: optics-release
-        run: echo "ref=$(scripts/optics-release-ref.sh)" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
-        with:
-          repository: ming2k/optics
-          path: optics
-          ref: ${{ steps.optics-release.outputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # llvm-tools-preview provides llvm-profdata for the Coverage step.
           components: rustfmt, clippy, llvm-tools-preview
       - name: Install system dependencies
         run: |
@@ -100,26 +61,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential dbus-daemon libclang-dev \
             libpipewire-0.3-dev libspa-0.2-dev pkg-config \
-            meson ninja-build glslang-tools \
-            libwayland-dev wayland-protocols libvulkan-dev \
-            libfreetype-dev libharfbuzz-dev libfontconfig1-dev \
-            libfribidi-dev libxkbcommon-dev \
-            mesa-vulkan-drivers pipewire wireplumber \
-            gstreamer1.0-pipewire gstreamer1.0-tools \
-            xdg-desktop-portal xdg-utils python3-pip
-          # optics' meson.build requires >=1.8.0; Ubuntu 24.04's apt ships 1.3.2.
-          sudo python3 -m pip install --break-system-packages 'meson>=1.8'
-          # optics builds with c_std=c23; Ubuntu 24.04's GCC 13 has no
-          # c23 mode, so compile the C libraries with Clang.
-          sudo apt-get install -y clang
-      - name: Build and install optics C libraries
-        run: |
-          CC=clang CXX=clang++ meson setup optics/build optics \
-            -Dexamples=false -Dtests=false --buildtype=release
-          meson compile -C optics/build
-          sudo meson install -C optics/build
-          sudo ldconfig
-          pkg-config --modversion flux lens iris
+            pipewire wireplumber gstreamer1.0-pipewire gstreamer1.0-tools \
+            xdg-desktop-portal xdg-utils
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -143,7 +86,6 @@ jobs:
         run: |
           DESTDIR="$PWD/stage" ./scripts/install.sh --prefix /usr
           test -x stage/usr/libexec/xdg-desktop-portal-atrium
-          test -x stage/usr/libexec/atrium-portal-prompter
           grep -Fx 'Exec=/usr/libexec/xdg-desktop-portal-atrium' \
             stage/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.atrium.service
           test -z "$(find stage -path '*pam*' -print -quit)"
