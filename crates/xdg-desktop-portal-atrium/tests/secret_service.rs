@@ -1,7 +1,7 @@
 //! End-to-end smoke test for the native Secret portal. The test starts the
 //! real backend on a private session bus, verifies that the incomplete
 //! Secret Service compatibility API is not exposed, and exercises fd-based
-//! secret delivery.
+//! secret delivery through a Portal-owned fake sigil daemon.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -13,91 +13,12 @@ use zbus::zvariant::{Fd, ObjectPath, OwnedObjectPath, Value};
 
 mod common;
 use common::{
-    KillOnDrop, daemon_command, e2e_required, pipe_pair, private_bus, read_all_with_timeout,
-    spawn_daemon, temp_dir, wait_for_name,
+    FakeSigil, FakeSigilResponse, KillOnDrop, e2e_required, pipe_pair, private_bus,
+    read_all_with_timeout, spawn_daemon, temp_dir, wait_for_name,
 };
 
 const PORTAL: &str = "org.freedesktop.impl.portal.desktop.atrium";
 const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
-
-#[test]
-fn unsafe_secret_storage_prevents_name_acquisition() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
-    use std::time::Instant;
-
-    let Some(bus) = private_bus() else {
-        eprintln!("unsafe secret storage test: dbus-daemon unavailable, skipping");
-        return;
-    };
-    let conn = bus.connect();
-    let root = temp_dir("unsafe-secret-startup");
-    let data_dir = root.join("data");
-    let runtime_dir = root.join("runtime");
-    let secrets_dir = data_dir.join("aegis/secrets");
-    std::fs::create_dir_all(&secrets_dir).expect("create secret fixture");
-    std::fs::create_dir_all(&runtime_dir).expect("create runtime fixture");
-    std::fs::set_permissions(&secrets_dir, std::fs::Permissions::from_mode(0o700))
-        .expect("make secret fixture private");
-    let key_target = root.join("key-target");
-    std::fs::write(&key_target, "00".repeat(32)).expect("write key target");
-    std::fs::set_permissions(&key_target, std::fs::Permissions::from_mode(0o600))
-        .expect("make key target private");
-    symlink(&key_target, secrets_dir.join("vault.key")).expect("create unsafe key symlink");
-
-    let log_path = root.join("backend.log");
-    let mut command = daemon_command(&bus, &data_dir, &runtime_dir);
-    command.stderr(Stdio::from(
-        std::fs::File::create(&log_path).expect("create backend log"),
-    ));
-    let mut backend = command.spawn().expect("spawn backend");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        if let Some(status) = backend.try_wait().expect("poll backend") {
-            break status;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "backend did not fail closed for unsafe Secret storage"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    assert!(!status.success(), "unsafe Secret storage must be fatal");
-
-    let fdo = Proxy::new(
-        &conn,
-        "org.freedesktop.DBus",
-        "/org/freedesktop/DBus",
-        "org.freedesktop.DBus",
-    )
-    .expect("D-Bus proxy");
-    let owned: bool = fdo.call("NameHasOwner", &(PORTAL,)).expect("NameHasOwner");
-    assert!(!owned, "a failed backend must never acquire its bus name");
-    let log = std::fs::read_to_string(&log_path).expect("read backend log");
-    assert!(
-        log.contains("secret vault setup failed"),
-        "startup error must identify the failed contract: {log}"
-    );
-    let _ = std::fs::remove_dir_all(root);
-}
-
-/// The HKDF-SHA256 portal-secret derivation, duplicated from the
-/// implementation so this verifies the wire contract independently.
-fn expected_portal_secret(data_dir: &Path, app_id: &str) -> [u8; 32] {
-    let hex = std::fs::read_to_string(data_dir.join("aegis/secrets/vault.key"))
-        .expect("daemon must create vault.key");
-    let hex = hex.trim();
-    assert_eq!(hex.len(), 64, "vault.key must hold 32 hex bytes");
-    let mut key = [0u8; 32];
-    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
-        key[i] = u8::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16).unwrap();
-    }
-    let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, &key);
-    let mut out = [0u8; 32];
-    let mut info = b"atrium.portal.Secret/v1\0".to_vec();
-    info.extend_from_slice(app_id.as_bytes());
-    hk.expand(&info, &mut out).unwrap();
-    out
-}
 
 #[test]
 fn native_secret_portal_end_to_end() {
@@ -109,6 +30,9 @@ fn native_secret_portal_end_to_end() {
 
     let data_dir = temp_dir("data");
     let runtime_dir = temp_dir("runtime");
+    let served: Vec<u8> = (0..32u8).collect();
+    let sigil = FakeSigil::bind(&runtime_dir, FakeSigilResponse::Secret(served.clone()));
+    assert!(sigil.bind_error().is_none(), "fake sigil must bind");
     let _daemon = KillOnDrop(spawn_daemon(&bus, &data_dir, &runtime_dir));
     wait_for_name(&conn, PORTAL);
 
@@ -238,9 +162,19 @@ fn native_secret_portal_end_to_end() {
     let delivered = read_all_with_timeout(read_end, Duration::from_secs(5));
     assert_eq!(
         delivered.as_slice(),
-        &expected_portal_secret(&data_dir, "dev.tessera.smoke"),
-        "the pipe must deliver HKDF-SHA256(vault key, atrium.portal.Secret/v1)"
+        served.as_slice(),
+        "the pipe must deliver the sigil-served application secret"
     );
+    let observed = sigil.observed();
+    assert_eq!(
+        observed.len(),
+        1,
+        "exactly one GetApplicationSecret request"
+    );
+    let request = &observed[0];
+    assert_eq!(request.namespace, "atrium.portal.Secret/v1");
+    assert_eq!(request.subject, "dev.tessera.smoke");
+    assert_eq!(request.purpose, "master-secret");
 
     let _ = std::fs::remove_dir_all(&data_dir);
     let _ = std::fs::remove_dir_all(&runtime_dir);
@@ -299,6 +233,9 @@ fn public_frontend_delivers_the_native_secret() {
     ] {
         std::fs::create_dir_all(directory).expect("create public Secret fixture");
     }
+    let served: Vec<u8> = (0x41..0x51).collect();
+    let sigil = FakeSigil::bind(&runtime_dir, FakeSigilResponse::Secret(served.clone()));
+    assert!(sigil.bind_error().is_none(), "fake sigil must bind");
     std::fs::write(
         portal_dir.join("atrium.portal"),
         include_str!("../../../contrib/xdg-desktop-portal/portals/atrium.portal"),
@@ -308,7 +245,7 @@ fn public_frontend_delivers_the_native_secret() {
         // 1.18 only consults the desktop-specific filename when
         // XDG_CURRENT_DESKTOP is non-empty. Mirror the installed package.
         config_dir.join("atrium-portals.conf"),
-        "[preferred]\ndefault=tessera\norg.freedesktop.impl.portal.Secret=tessera\n",
+        "[preferred]\ndefault=atrium\norg.freedesktop.impl.portal.Secret=atrium\n",
     )
     .expect("stage portal routing");
 
@@ -330,7 +267,7 @@ fn public_frontend_delivers_the_native_secret() {
     let mut frontend_command = Command::new(frontend);
     frontend_command
         .env("DBUS_SESSION_BUS_ADDRESS", bus.address())
-        .env("XDG_CURRENT_DESKTOP", "tessera")
+        .env("XDG_CURRENT_DESKTOP", "atrium")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &frontend_data)
         // xdg-desktop-portal 1.18 discovers test backends through this
@@ -399,13 +336,10 @@ fn public_frontend_delivers_the_native_secret() {
         );
     }
     let delivered = read_all_with_timeout(read_end, Duration::from_secs(5));
-    // Host callers have an empty app id. Sandboxed callers are covered by
-    // the derivation unit test, which proves distinct IDs produce distinct
-    // keys without requiring a Flatpak installation in CI.
-    assert_eq!(
-        delivered.as_slice(),
-        &expected_portal_secret(&backend_data, "")
-    );
+    // Host callers have an empty app id. The sigil daemon derives distinct
+    // per-subject keys; this fixture proves the delivered bytes are exactly
+    // what the daemon served.
+    assert_eq!(delivered.as_slice(), served.as_slice());
 
     std::fs::remove_dir_all(root).ok();
 }

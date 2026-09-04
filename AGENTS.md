@@ -18,6 +18,17 @@ Keep the Portal source and build graph independent from the Tessera repository:
 - Test wire changes with literal protocol fixtures and the independent test
   server; do not import the compositor's server implementation into tests.
 
+The sigil (Secret storage) and arca (FileChooser prompt) integrations follow
+the same boundary ([ADR-0020](docs/adr/0020-secret-vault-delegation-to-sigil.md)):
+
+- Integrate with sigil at runtime only, through the Portal-owned blocking
+  client in `atrium-portal-secret/src/native.rs`; do not import sigil crates
+  as path, Git, or registry dependencies.
+- Integrate with arca as a runtime binary contract (`arca --chooser-prompt`);
+  do not add arca source dependencies.
+- Test both contracts with literal wire fixtures and Portal-owned fakes;
+  never import sigil or arca implementation code into tests.
+
 The prompter UI builds on the optics stack (iris/lens), resolved from the
 tagged `ming2k/optics` release — an independent third repository, so the
 rules above do not cover it. For joint development against a sibling optics

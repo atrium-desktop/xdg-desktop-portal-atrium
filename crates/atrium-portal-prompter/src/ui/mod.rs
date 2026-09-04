@@ -573,5 +573,9 @@ pub fn computer_icon(frame: &mut Frame, size: f32) {
 
 /// The three-dots menu glyph for the more-options dropdown.
 pub fn more_icon(frame: &mut Frame, size: f32) {
-    raw_icon(frame, lens::sys::lens_icon_id::LENS_ICON_MORE_VERTICAL, size);
+    raw_icon(
+        frame,
+        lens::sys::lens_icon_id::LENS_ICON_MORE_VERTICAL,
+        size,
+    );
 }

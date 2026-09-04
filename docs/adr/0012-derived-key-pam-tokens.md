@@ -1,6 +1,6 @@
 # ADR-0012: Derived-key PAM unlock tokens
 
-- Status: Accepted
+- Status: Superseded by [ADR-0020](0020-secret-vault-delegation-to-sigil.md)
 - Date: 2026-08-13
 - Related: [ADR-0009](0009-vault-kdf-persistence-and-password-lifecycle.md),
   [ADR-0010](0010-pam-confirmed-planting-and-libpam-abi.md)

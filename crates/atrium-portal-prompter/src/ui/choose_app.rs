@@ -148,29 +148,26 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
             }
 
             // ---- footer buttons ------------------------------------------
-            f.row()
-                .gap(metrics::SPACE_S)
-                .items_center()
-                .show_flat(|f| {
-                    f.flex(1.0);
-                    f.spacer(0.0);
+            f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+                f.flex(1.0);
+                f.spacer(0.0);
 
-                    f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
-                    f.push_style(style::secondary_button_style_for(
-                        &state.appearance.palette(),
-                    ));
-                    let cancel = f.button("Cancel");
-                    f.pop_style();
-                    if cancel {
-                        finish(state, None);
-                        return;
-                    }
+                f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
+                f.push_style(style::secondary_button_style_for(
+                    &state.appearance.palette(),
+                ));
+                let cancel = f.button("Cancel");
+                f.pop_style();
+                if cancel {
+                    finish(state, None);
+                    return;
+                }
 
-                    f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
-                    if f.button("Select") {
-                        accept(state);
-                    }
-                });
+                f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
+                if f.button("Select") {
+                    accept(state);
+                }
+            });
         });
 }
 
@@ -194,32 +191,32 @@ fn choice_row(state: &mut State, f: &mut Frame, index: usize) {
         }
         ChoiceState::Options(selected) => {
             let popup_id = format!("choice-{}", choice.id);
-            f.row()
-                .gap(metrics::SPACE_S)
-                .items_center()
-                .show_flat(|f| {
-                    f.label(&choice.label);
-                    let labels: Vec<&str> = choice
-                        .options
-                        .iter()
-                        .map(|(_, label)| label.as_str())
-                        .collect();
-                    let current_label = labels.get((*selected).max(0) as usize).copied().unwrap_or("");
-                    if f.button(current_label) {
-                        f.place_toggle(&popup_id);
-                    }
-                    let rect = f.response().rect;
-                    let palette = state.appearance.palette();
-                    f.place(
-                        &popup_id,
-                        &PlaceOpts {
-                            mode: PlaceMode::Anchored,
-                            band: Band::Popup,
-                            rect,
-                            transient: true,
-                            ..Default::default()
-                        },
-                        |f| {
+            f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+                f.label(&choice.label);
+                let labels: Vec<&str> = choice
+                    .options
+                    .iter()
+                    .map(|(_, label)| label.as_str())
+                    .collect();
+                let current_label = labels
+                    .get((*selected).max(0) as usize)
+                    .copied()
+                    .unwrap_or("");
+                if f.button(current_label) {
+                    f.place_toggle(&popup_id);
+                }
+                let rect = f.response().rect;
+                let palette = state.appearance.palette();
+                f.place(
+                    &popup_id,
+                    &PlaceOpts {
+                        mode: PlaceMode::Anchored,
+                        band: Band::Popup,
+                        rect,
+                        transient: true,
+                        ..Default::default()
+                    },
+                    |f| {
                         f.col()
                             .bg(palette.surface)
                             .border(palette.border)
@@ -234,8 +231,9 @@ fn choice_row(state: &mut State, f: &mut Frame, index: usize) {
                                     }
                                 }
                             });
-                    });
-                });
+                    },
+                );
+            });
         }
     }
 }

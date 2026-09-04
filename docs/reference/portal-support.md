@@ -7,7 +7,7 @@
 | `org.freedesktop.impl.portal.Settings` | Version 1 | Compositor-owned appearance and input settings |
 | `org.freedesktop.impl.portal.Screenshot` | Version 3 | Area target, color picking, and consent-checked legacy output capture |
 | `org.freedesktop.impl.portal.ScreenCast` | Version 6 | Monitor and (protocol 29) window sources through a source chooser plus compositor consent; per-output selection on multi-output compositors; Hidden and (protocol 29) Embedded cursor modes; `persist_mode` 1–2 restore tokens for monitor selections ([ADR-0016](../adr/0016-screencast-runtime-protocol-29.md)); stable `pipewire-serial`, 60 fps ceiling, zero-copy dmabuf delivery over the protocol-25 [slot protocol](../adr/0005-screencast-dmabuf-slot-protocol.md) with a shared-memory fallback; output geometry changes renegotiate the live stream; per-frame damage rides `SPA_META_VideoDamage` when the consumer requests it |
-| `org.freedesktop.impl.portal.Secret` | Version 1 | Stable per-application secret from the encrypted vault; Portal-owned masked unlock prompt; the vault locks/unlocks with the logind session-lock boundary (ADR-0019) |
+| `org.freedesktop.impl.portal.Secret` | Version 1 | Stable per-application secret derived by the sigil daemon (ADR-0020); storage, unlock, and the logind session-lock boundary (ADR-0019) are sigil-owned; a locked or absent sigil daemon reports cancelled/error response codes |
 | `org.freedesktop.impl.portal.Lockdown` | Current seven-property ABI | All properties are read-write and process-resident |
 | `org.freedesktop.impl.portal.FileChooser` | Current backend ABI | Open, save, directory, and multiple-file flows through a one-shot optics (iris/lens) process |
 | `org.freedesktop.impl.portal.Email` | Current backend ABI | `xdg-email` handoff, attachment URI validation, activation token forwarding |
@@ -47,7 +47,7 @@ them cleanly.
 | logind (`org.freedesktop.login1`) | Inhibit locks; without it Inhibit calls fail with a backend error |
 | `lp` (CUPS client) | Print submission; without it `Print` answers with a backend error |
 | `xdg-email` | Email handoff |
-| PAM | Optional login-time vault unlock (a derived vault-key token when a password-mode vault exists) and vault password propagation on login password changes |
+| sigil daemon | Secret storage: the at-rest vault, unlock prompting, PAM auto-unlock (`pam_sigil`), and the logind session-lock binding live in the sigil repository; its IPC socket must exist at `$XDG_RUNTIME_DIR/sigil/native.sock` |
 
 The release gates exercise two production integration baselines:
 
@@ -56,8 +56,8 @@ The release gates exercise two production integration baselines:
 | Ubuntu 24.04 | 1.18.4 | 1.0.5 | 0.4.17 |
 | Current development | 1.20.4 | 1.6.4 | 0.5.14 |
 
-Meson enforces `libpipewire-0.3` 0.3 or newer and the
-SPA 0.2 development ABI. The Ubuntu baseline is tested with Rust 1.88, the
+The target session must run PipeWire 0.3 or newer with the SPA 0.2 ABI for
+ScreenCast consumers. The Ubuntu baseline is tested with Rust 1.88, the
 minimum supported Rust version. Compatible newer releases remain supported
 through their stable ABIs.
 
@@ -66,9 +66,8 @@ whose wire schemas are verified by the current Portal line.
 
 ## Persistent State
 
-The default vault directory is
-`$XDG_DATA_HOME/aegis/secrets`, or `$HOME/.local/share/aegis/secrets` when
-`XDG_DATA_HOME` is unset.
+The Secret vault is owned by the sigil daemon; see the sigil documentation
+for its on-disk layout and procedures. This backend persists only:
 
 ScreenCast `persist_mode` 1 restore tokens live in
 `$XDG_DATA_HOME/atrium-portal/screencast-restore.json` (directory `0700`,
@@ -79,22 +78,7 @@ selection. `persist_mode` 2 tokens are process-resident and never touch
 the disk; they vanish when the owning application's bus connection
 closes.
 
-| Path | Mode | Purpose |
-|------|------|---------|
-| `vault.key` | `0600` | Random master key for key-file mode |
-| `vault.kdf` | Not group/other writable | Persisted Argon2id parameters and salt for password mode; authoritative when present |
-| `vault.salt` | Not group/other writable | Argon2id salt for legacy password-mode vaults; downgrade mirror once `vault.kdf` exists |
-| `vault.kdf.next`, `vault.salt.next` | Not group/other writable | Transient two-phase re-key state; adopted or cleaned up on the next successful password unlock |
-| `vault.enc` | `0600` | XChaCha20-Poly1305 encrypted vault |
-
-The directory is private to the user. Symlinks, unexpected owners, unsafe
-modes, oversized input, orphan ciphertext, and malformed encryption are
-startup errors. Back up all files together while the daemon is stopped.
-A bare `vault.salt` marks a legacy vault keyed with the crate-default
-Argon2id parameters; the first successful unlock backfills `vault.kdf`
-and keeps `vault.salt` as the downgrade mirror.
-
 The production per-application derivation differs from the shared secret
 returned by the pre-production `v0.0.1` implementation. The first production
-upgrade preserves the vault but rotates the value returned to applications.
+upgrade preserved the vault but rotated the value returned to applications.
 Data encrypted directly with the old portal value must be recreated.

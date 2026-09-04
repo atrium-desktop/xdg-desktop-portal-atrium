@@ -1,6 +1,6 @@
 # ADR-0010: PAM confirmed planting, vault re-key, and the libpam C ABI
 
-- Status: Accepted
+- Status: Superseded by [ADR-0020](0020-secret-vault-delegation-to-sigil.md)
 - Date: 2026-08-13
 - Related: [ADR-0009](0009-vault-kdf-persistence-and-password-lifecycle.md)
 

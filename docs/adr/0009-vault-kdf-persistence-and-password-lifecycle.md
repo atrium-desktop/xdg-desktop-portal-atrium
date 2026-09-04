@@ -1,6 +1,6 @@
 # ADR-0009: Vault KDF persistence and the password lifecycle
 
-- Status: Accepted (re-key write protocol superseded by [ADR-0013](0013-two-phase-vault-rekey.md))
+- Status: Superseded by [ADR-0020](0020-secret-vault-delegation-to-sigil.md)
 - Date: 2026-08-13
 
 ## Context

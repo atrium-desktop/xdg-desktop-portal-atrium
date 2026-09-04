@@ -58,7 +58,12 @@ fn get_user_information(
     let (response, results): (u32, HashMap<String, OwnedValue>) = account
         .call(
             "GetUserInformation",
-            &(handle, "dev.tessera.smoke", "wayland:account-parent", options),
+            &(
+                handle,
+                "dev.tessera.smoke",
+                "wayland:account-parent",
+                options,
+            ),
         )
         .expect("GetUserInformation");
     let PromptRequest::Confirm(request) = read_prompter_request(&fixture_dir, 1) else {

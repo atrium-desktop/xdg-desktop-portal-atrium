@@ -1,6 +1,0 @@
-option(
-  'pam',
-  type: 'boolean',
-  value: false,
-  description: 'Build and install the optional MIT-licensed pam_atrium module',
-)

@@ -73,7 +73,9 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
     if key_pressed(input, key::UP) && state.selected > 0 {
         state.selected -= 1;
     }
-    if key_pressed(input, key::DOWN) && ((state.selected + 1) as usize) < state.request.options.len() {
+    if key_pressed(input, key::DOWN)
+        && ((state.selected + 1) as usize) < state.request.options.len()
+    {
         state.selected += 1;
     }
 
@@ -128,29 +130,26 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
             }
 
             // ---- footer buttons -----------------------------------------
-            f.row()
-                .gap(metrics::SPACE_S)
-                .items_center()
-                .show_flat(|f| {
-                    f.flex(1.0);
-                    f.spacer(0.0);
+            f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+                f.flex(1.0);
+                f.spacer(0.0);
 
-                    f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
-                    f.push_style(style::secondary_button_style_for(
-                        &state.appearance.palette(),
-                    ));
-                    let cancel = f.button("Cancel");
-                    f.pop_style();
-                    if cancel {
-                        finish(state, None);
-                        return;
-                    }
+                f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
+                f.push_style(style::secondary_button_style_for(
+                    &state.appearance.palette(),
+                ));
+                let cancel = f.button("Cancel");
+                f.pop_style();
+                if cancel {
+                    finish(state, None);
+                    return;
+                }
 
-                    f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
-                    if f.button("Share") {
-                        accept(state);
-                    }
-                });
+                f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
+                if f.button("Share") {
+                    accept(state);
+                }
+            });
         });
 }
 

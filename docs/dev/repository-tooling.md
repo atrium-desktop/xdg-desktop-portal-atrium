@@ -35,22 +35,21 @@ toolchain shape CI's main job uses. The CI MSRV job overrides the pin
 with `RUSTUP_TOOLCHAIN=1.88.0`, which outranks `rust-toolchain.toml`, so
 the minimum supported toolchain really runs there.
 
-## `scripts/meson-cargo-build.sh`
+## `scripts/install.sh`
 
-Meson's wrapper around the Cargo release build. Meson invokes it with a
-mode, the source root, the build root, the Cargo executable, and the
-output paths:
+Builds the release artifacts with Cargo and installs the full backend
+surface: the two private executables, the generated D-Bus service file
+(with `@libexecdir@` substituted to the final path, ignoring `DESTDIR`),
+and the portal metadata:
 
 ```text
-meson-cargo-build.sh portal <source-root> <build-root> <cargo> <portal-out> <prompter-out>
-meson-cargo-build.sh pam <source-root> <build-root> <cargo> <pam-out>
+scripts/install.sh [--prefix PREFIX] [--libexecdir DIR] [--datadir DIR]
+                   [--no-build]
 ```
 
-The `portal` mode builds `xdg-desktop-portal-atrium` and
-`atrium-portal-prompter` with `--locked --release` into the build root's
-`cargo-target/` and copies both binaries to the Meson output paths; the
-`pam` mode does the same for `libpam_atrium.so`. Run it through Meson, not
-by hand; `meson compile` wires the arguments.
+Honors `DESTDIR` for staged distribution packaging; `--no-build` installs
+from the existing `target/release` artifacts. Run it directly or from a
+package recipe — there is no configure step to cache.
 
 ## `scripts/optics-release-ref.sh`
 

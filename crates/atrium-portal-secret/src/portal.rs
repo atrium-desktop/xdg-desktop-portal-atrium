@@ -3,7 +3,7 @@
 //!
 //! Sandboxed applications retrieve a master secret through this interface;
 //! the portal frontend then encrypts per-application secrets with it. The
-//! served secret is derived from the credentiald daemon via native IPC so
+//! served secret is derived from the sigil daemon via native IPC so
 //! applications receive stable, mutually isolated keys. It is written to the
 //! caller-supplied file descriptor rather than returned over D-Bus.
 //!
@@ -15,9 +15,9 @@ use std::io::Write;
 use std::os::fd::{AsFd, FromRawFd, IntoRawFd};
 use std::sync::{Arc, Mutex};
 
+use crate::native::{NativeError, SigilConnection};
 use atrium_portal_runtime::RequestTracker;
 use atrium_portal_runtime::sync;
-use credential_client::{ClientError, CredentialClient};
 use zbus::zvariant::{Fd, ObjectPath, Value};
 
 /// The served interface version.
@@ -75,23 +75,27 @@ impl SecretIface {
             }
         };
 
-        let client = match CredentialClient::connect_default() {
+        let connection = match SigilConnection::connect_default() {
             Ok(c) => c,
             Err(e) => {
-                log::error!("portal: failed to connect to credentiald: {e}");
+                log::error!("portal: failed to locate the sigil socket: {e}");
                 return Ok((2, HashMap::new()));
             }
         };
 
-        match client
-            .get_application_secret("atrium.portal.Secret/v1", app_id, "master-secret")
-            .await
+        match connection.get_application_secret("atrium.portal.Secret/v1", app_id, "master-secret")
         {
             Ok(secret) => {
                 let raw = owned_fd.into_raw_fd();
                 let mut file = unsafe { File::from_raw_fd(raw) };
                 let write_res = file.write_all(secret.as_slice());
-                let sync_res = file.sync_all();
+                // Only regular files can fsync; the caller-supplied fd may
+                // be a pipe, which rejects fsync with EINVAL.
+                let sync_res = match file.metadata() {
+                    Ok(metadata) if metadata.is_file() => file.sync_all(),
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(error),
+                };
 
                 if let Err(e) = write_res {
                     log::warn!("portal: could not write the secret into the client fd: {e}");
@@ -104,11 +108,11 @@ impl SecretIface {
 
                 Ok((0, HashMap::new()))
             }
-            Err(ClientError::Locked) => {
-                log::info!("portal: credentiald is locked for '{app_id}'");
+            Err(NativeError::Locked) => {
+                log::info!("portal: sigil is locked for '{app_id}'");
                 Ok((1, HashMap::new()))
             }
-            Err(ClientError::Cancelled) => {
+            Err(NativeError::Cancelled) => {
                 log::info!("portal: unlock cancelled for '{app_id}'");
                 Ok((1, HashMap::new()))
             }

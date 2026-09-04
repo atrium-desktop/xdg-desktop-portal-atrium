@@ -264,29 +264,23 @@ pub fn edit_surface(
             if runs.has_preedit {
                 // The composition: accent text underlined, caret inside at the
                 // preedit cursor — the same reading lens's textfield gives.
-                f.col()
-                    .gap(0.0)
-                    .cross(Align::Stretch)
-                    .show_flat(|f| {
-                        f.row()
-                            .gap(0.0)
-                            .items_center()
-                            .show_flat(|f| {
-                                f.push_style(style::accent_text_style_for(&palette));
-                                if !runs.pre_before.is_empty() {
-                                    f.label(runs.pre_before);
-                                }
-                                if focused {
-                                    render_caret(f, palette.text);
-                                }
-                                if !runs.pre_after.is_empty() {
-                                    f.label(runs.pre_after);
-                                }
-                                f.pop_style();
-                            });
-                        // The underline stretches to the text row's width.
-                        f.row().height(1.0).bg(palette.accent).empty();
+                f.col().gap(0.0).cross(Align::Stretch).show_flat(|f| {
+                    f.row().gap(0.0).items_center().show_flat(|f| {
+                        f.push_style(style::accent_text_style_for(&palette));
+                        if !runs.pre_before.is_empty() {
+                            f.label(runs.pre_before);
+                        }
+                        if focused {
+                            render_caret(f, palette.text);
+                        }
+                        if !runs.pre_after.is_empty() {
+                            f.label(runs.pre_after);
+                        }
+                        f.pop_style();
                     });
+                    // The underline stretches to the text row's width.
+                    f.row().height(1.0).bg(palette.accent).empty();
+                });
             } else if focused {
                 render_caret(f, palette.text);
             }

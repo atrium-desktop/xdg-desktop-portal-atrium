@@ -6,10 +6,9 @@
    `[Unreleased]` heading in `CHANGELOG.md` (add the matching
    `[0.0.N]: …/tag/v0.0.N` link-ref definition and move the
    `[Unreleased]` compare base to the new tag).
-2. Set `meson.build`'s `project(version:)` to the same value.
-3. Run `scripts/version-consistency.sh` — it fails until every versioned
+2. Run `scripts/version-consistency.sh` — it fails until every versioned
    surface below agrees:
-   - `Cargo.toml` workspace version ↔ `meson.build` version ↔ the newest
+   - `Cargo.toml` workspace version ↔ the newest
      `CHANGELOG.md` release heading and link refs,
    - `README.md` and `docs/reference/compatibility.md` protocol numbers ↔
      `atrium-portal-ipc`'s `PROTOCOL_VERSION`/`MIN_PROTOCOL_VERSION`,
@@ -50,28 +49,21 @@ GStreamer PipeWire consumer is unavailable.
 
 ## Package Staging
 
-Build and inspect both licensing variants:
+Build and inspect the package:
 
 ```bash
-meson setup build-package --wipe \
-  --buildtype=release --prefix=/usr -Dpam=false
-meson compile -C build-package
-DESTDIR="$PWD/stage" meson install -C build-package
-
-meson setup build-package --reconfigure -Dpam=true
-meson compile -C build-package
-DESTDIR="$PWD/stage-pam" meson install -C build-package
+cargo build --locked --release -p xdg-desktop-portal-atrium -p atrium-portal-prompter
+DESTDIR="$PWD/stage" ./scripts/install.sh --prefix /usr --no-build
 ```
 
-Confirm executable modes, the configured D-Bus `Exec` path, the portal
-metadata interface list, the interface routing, and the PAM module's
-distribution license before publishing artifacts.
+Confirm executable modes, the configured D-Bus `Exec` path, and the portal
+metadata interface list before publishing artifacts.
 
 ## Release Metadata
 
 1. Move the `CHANGELOG.md` Unreleased entries into the release version and
    date.
-2. Update the workspace and Meson project versions together.
+2. Update the workspace version.
 3. Update the compatibility table when the verified Tessera runtime set or IPC
    protocol changes.
 4. Tag only the reviewed canonical-lockfile commit.

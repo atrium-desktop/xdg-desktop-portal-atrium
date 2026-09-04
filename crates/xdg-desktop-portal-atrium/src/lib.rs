@@ -64,14 +64,12 @@ mod screencast;
 mod screenshot;
 mod session;
 mod settings;
-mod vault_watch;
 mod wallpaper;
 
 use std::sync::{Arc, Mutex, mpsc};
 
-use atrium_portal_prompter::{PromptResult, PrompterRequest, SecretRequest};
 use atrium_portal_runtime::RequestTracker;
-use atrium_portal_secret::{PromptResponse, SecretError, SecretPrompter, SecretService};
+use atrium_portal_secret::{SecretError, SecretService};
 use screencast::{CastJob, ScreenCastIface};
 use screenshot::{CaptureJob, ScreenshotIface};
 use session::SessionRegistry;
@@ -101,40 +99,6 @@ pub enum PortalError {
     /// non-responsive interface.
     #[error("worker setup failed: {0}")]
     Worker(#[source] std::io::Error),
-}
-
-/// Process adapter kept at the composition root so Secret storage depends on
-/// only a narrow prompt capability, not toolkit or compositor IPC. Carries a
-/// clone of the settings store so the unlock dialog follows the compositor
-/// appearance like every other prompt.
-struct PortalSecretPrompter {
-    settings: settings::SettingsStore,
-}
-
-impl SecretPrompter for PortalSecretPrompter {
-    fn prompt_secret(
-        &self,
-        title: &str,
-        reason: Option<&str>,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<PromptResponse, String> {
-        let result = prompter::invoke(
-            PrompterRequest::secret(SecretRequest {
-                title: title.to_owned(),
-                reason: reason.map(str::to_owned),
-            }),
-            Some(&self.settings),
-            Some(cancelled),
-        )
-        .map_err(|error| error.to_string())?;
-        match result {
-            PromptResult::Secret(mut response) => match response.take_value() {
-                Some(value) => Ok(PromptResponse::Secret(value)),
-                None => Ok(PromptResponse::Cancelled),
-            },
-            _ => Err("secret prompter returned the wrong response kind".to_owned()),
-        }
-    }
 }
 
 /// Spawn one named long-lived worker thread; a spawn failure aborts
@@ -229,10 +193,10 @@ pub fn run() -> Result<(), PortalError> {
 
     // Secret is declared in atrium.portal, so its storage is part of the
     // service's startup contract. Never acquire the bus name with that
-    // advertised interface missing.
-    let secret_service = Arc::new(SecretService::initialize(Arc::new(PortalSecretPrompter {
-        settings: settings_store.clone(),
-    }))?);
+    // advertised interface missing. Storage, unlock, and lock state are
+    // delegated to the sigil daemon (ADR-0020); this adapter only projects
+    // the portal interface onto sigil's native IPC client.
+    let secret_service = Arc::new(SecretService::new());
 
     // Serve before requesting the name so no call can arrive at a name we own
     // but do not serve yet (same ordering as the SNI tray watcher).
@@ -355,13 +319,6 @@ pub fn run() -> Result<(), PortalError> {
     )?;
 
     secret_service.register_portal(&conn, Arc::clone(&tracker), DESKTOP_PATH)?;
-    secret_service.start_pam_watcher();
-    // The vault's lock state follows the desktop's authoritative lock
-    // boundary (logind session Lock/Unlock and suspend) — ADR-0019. The
-    // 15-minute idle auto-lock is gone: an idle timer measured "no app
-    // read a secret", not "the user left", and locked users out of
-    // keyfile vaults that have no password to prompt for.
-    vault_watch::spawn_session_lock_watcher(Arc::clone(&secret_service));
 
     let worker_tracker = Arc::clone(&tracker);
     let worker_socket = socket.clone();
@@ -544,7 +501,7 @@ mod integration_metadata_tests {
     #[test]
     fn atrium_is_the_sole_backend_without_a_gtk_fallback() {
         assert!(
-            PORTALS_CONF.lines().any(|line| line == "default=tessera"),
+            PORTALS_CONF.lines().any(|line| line == "default=atrium"),
             "the routing default is Tessera alone"
         );
         assert!(
@@ -570,7 +527,7 @@ mod integration_metadata_tests {
             "Wallpaper",
             "Print",
         ] {
-            let route = format!("org.freedesktop.impl.portal.{interface}=tessera");
+            let route = format!("org.freedesktop.impl.portal.{interface}=atrium");
             assert!(
                 PORTALS_CONF.lines().any(|line| line.starts_with(&route)),
                 "missing explicit Tessera route for {interface}"
@@ -580,7 +537,7 @@ mod integration_metadata_tests {
         for line in PORTALS_CONF.lines() {
             if line.starts_with("org.freedesktop.") {
                 assert!(
-                    line.ends_with("=tessera"),
+                    line.ends_with("=atrium"),
                     "unexpected non-Tessera route: {line}"
                 );
             }

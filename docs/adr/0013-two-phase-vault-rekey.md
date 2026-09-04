@@ -1,6 +1,6 @@
 # ADR-0013: Crash-safe two-phase vault re-key
 
-- Status: Accepted
+- Status: Superseded by [ADR-0020](0020-secret-vault-delegation-to-sigil.md)
 - Date: 2026-08-13
 - Supersedes: the re-key write protocol of
   [ADR-0009](0009-vault-kdf-persistence-and-password-lifecycle.md)

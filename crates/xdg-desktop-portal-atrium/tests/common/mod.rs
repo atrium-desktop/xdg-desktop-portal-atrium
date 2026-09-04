@@ -13,7 +13,7 @@
 
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -304,4 +304,165 @@ pub fn read_all_with_timeout(mut file: std::fs::File, timeout: Duration) -> Vec<
     });
     rx.recv_timeout(timeout)
         .expect("the pipe must reach EOF within the timeout")
+}
+
+// ---- fake sigil daemon ------------------------------------------------------
+
+/// A Portal-owned stand-in for the sigil daemon's native IPC socket.
+///
+/// The wire format mirrors sigil's protocol literally — a u32 big-endian
+/// length prefix followed by JSON, with externally tagged request and
+/// response enums — defined here as local fixtures rather than imported
+/// from the sigil workspace. A shared implementation could make a matching
+/// protocol bug pass on both sides; these literals cannot.
+pub struct FakeSigil {
+    runtime_dir: PathBuf,
+    listener: Option<std::os::unix::net::UnixListener>,
+    observed: std::sync::Arc<std::sync::Mutex<Vec<ObservedSecretRequest>>>,
+    /// Set when the listener could not be created (e.g. a leftover socket).
+    bind_error: Option<String>,
+}
+
+/// The GetApplicationSecret request the portal sent, captured verbatim.
+#[derive(Clone, Debug)]
+pub struct ObservedSecretRequest {
+    pub namespace: String,
+    pub subject: String,
+    pub purpose: String,
+}
+
+/// What the fake sigil daemon answers with.
+pub enum FakeSigilResponse {
+    Secret(Vec<u8>),
+    Locked,
+    Cancelled,
+    Error(String),
+}
+
+impl FakeSigil {
+    /// Bind `$runtime_dir/sigil/native.sock` and serve until dropped. One
+    /// worker thread per connection; each connection carries exactly one
+    /// request, like the real client's connect-per-call pattern.
+    pub fn bind(runtime_dir: &Path, response: FakeSigilResponse) -> Self {
+        let socket_dir = runtime_dir.join("sigil");
+        std::fs::create_dir_all(&socket_dir).expect("create sigil runtime dir");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("make sigil runtime dir private");
+        let socket_path = socket_dir.join("native.sock");
+        let (listener, bind_error) = match std::os::unix::net::UnixListener::bind(&socket_path) {
+            Ok(listener) => (Some(listener), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        if let Some(listener) = &listener {
+            let observed = std::sync::Arc::clone(&observed);
+            let listener = listener.try_clone().expect("clone listener");
+            std::thread::spawn(move || serve(listener, observed, response));
+        }
+        Self {
+            runtime_dir: runtime_dir.to_path_buf(),
+            listener,
+            observed,
+            bind_error,
+        }
+    }
+
+    pub fn bind_error(&self) -> Option<&str> {
+        self.bind_error.as_deref()
+    }
+
+    /// Every GetApplicationSecret request seen so far.
+    pub fn observed(&self) -> Vec<ObservedSecretRequest> {
+        self.observed.lock().expect("observed lock").clone()
+    }
+}
+
+impl Drop for FakeSigil {
+    fn drop(&mut self) {
+        drop(self.listener.take());
+        let _ = std::fs::remove_dir_all(self.runtime_dir.join("sigil"));
+    }
+}
+
+#[derive(serde::Deserialize)]
+enum FakeIpcRequest {
+    GetApplicationSecret {
+        namespace: String,
+        subject: String,
+        purpose: String,
+    },
+}
+
+#[derive(serde::Serialize)]
+enum FakeIpcResponse {
+    Secret(Vec<u8>),
+    Locked,
+    Cancelled,
+    Error(String),
+}
+
+fn serve(
+    listener: std::os::unix::net::UnixListener,
+    observed: std::sync::Arc<std::sync::Mutex<Vec<ObservedSecretRequest>>>,
+    response: FakeSigilResponse,
+) {
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else {
+            break;
+        };
+        let request = read_frame(&mut stream).and_then(|bytes| {
+            serde_json::from_slice::<FakeIpcRequest>(&bytes).map_err(|e| e.to_string())
+        });
+        let reply = match request {
+            Ok(FakeIpcRequest::GetApplicationSecret {
+                namespace,
+                subject,
+                purpose,
+            }) => {
+                observed
+                    .lock()
+                    .expect("observed lock")
+                    .push(ObservedSecretRequest {
+                        namespace,
+                        subject,
+                        purpose,
+                    });
+                match &response {
+                    FakeSigilResponse::Secret(bytes) => FakeIpcResponse::Secret(bytes.clone()),
+                    FakeSigilResponse::Locked => FakeIpcResponse::Locked,
+                    FakeSigilResponse::Cancelled => FakeIpcResponse::Cancelled,
+                    FakeSigilResponse::Error(message) => FakeIpcResponse::Error(message.clone()),
+                }
+            }
+            Err(error) => FakeIpcResponse::Error(format!("unparseable request: {error}")),
+        };
+        let Ok(payload) = serde_json::to_vec(&reply) else {
+            continue;
+        };
+        let frame = [
+            (payload.len() as u32).to_be_bytes().as_slice(),
+            payload.as_slice(),
+        ]
+        .concat();
+        use std::io::Write;
+        let _ = stream.write_all(&frame);
+        let _ = stream.flush();
+        // The connection closes here, matching the client's one-request
+        // connect-per-call pattern.
+    }
+}
+
+fn read_frame(stream: &mut std::os::unix::net::UnixStream) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut len_bytes = [0u8; 4];
+    stream
+        .read_exact(&mut len_bytes)
+        .map_err(|e| format!("read length: {e}"))?;
+    let len = u32::from_be_bytes(len_bytes) as usize;
+    let mut buf = vec![0u8; len];
+    stream
+        .read_exact(&mut buf)
+        .map_err(|e| format!("read payload: {e}"))?;
+    Ok(buf)
 }

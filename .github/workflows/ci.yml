@@ -54,7 +54,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential libclang-dev libpam0g-dev \
+            build-essential libclang-dev \
             libpipewire-0.3-dev libspa-0.2-dev pkg-config \
             meson ninja-build glslang-tools \
             libwayland-dev wayland-protocols libvulkan-dev \
@@ -98,7 +98,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential dbus-daemon libclang-dev libpam0g-dev \
+            build-essential dbus-daemon libclang-dev \
             libpipewire-0.3-dev libspa-0.2-dev pkg-config \
             meson ninja-build glslang-tools \
             libwayland-dev wayland-protocols libvulkan-dev \
@@ -141,20 +141,12 @@ jobs:
         run: cargo build --locked --release --workspace
       - name: Package staging
         run: |
-          meson setup build-package --buildtype=release --prefix=/usr -Dpam=false
-          meson compile -C build-package
-          DESTDIR="$PWD/stage" meson install -C build-package
+          DESTDIR="$PWD/stage" ./scripts/install.sh --prefix /usr
           test -x stage/usr/libexec/xdg-desktop-portal-atrium
           test -x stage/usr/libexec/atrium-portal-prompter
           grep -Fx 'Exec=/usr/libexec/xdg-desktop-portal-atrium' \
             stage/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.atrium.service
-          test -z "$(find stage -path '*/security/pam_atrium.so' -print -quit)"
-
-          meson setup build-package --reconfigure -Dpam=true
-          meson compile -C build-package
-          DESTDIR="$PWD/stage-pam" meson install -C build-package
-          find stage-pam -path '*/security/pam_atrium.so' \
-            -type f -perm /111 -print -quit | grep -q .
+          test -z "$(find stage -path '*pam*' -print -quit)"
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@0.8.7

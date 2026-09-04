@@ -5,6 +5,22 @@ graphs, lockfiles, versions, and release lifecycles. They integrate at runtime
 through the narrow Tessera IPC contract described in
 [ADR-0004](../adr/0004-portal-ownership-and-runtime-ipc-boundary.md).
 
+Two further sibling repositories integrate at runtime as well
+([ADR-0020](../adr/0020-secret-vault-delegation-to-sigil.md)):
+
+- **sigil** — the `org.freedesktop.secrets` provider. The Secret portal
+  projects onto its Unix socket (`$XDG_RUNTIME_DIR/sigil/native.sock`,
+  u32 big-endian length prefix + JSON, externally tagged enums) through the
+  Portal-owned blocking client in `atrium-portal-secret/src/native.rs`. No
+  sigil crate is imported; tests use literal wire fixtures and a
+  Portal-owned fake server. The vault, `pam_sigil`, and the logind lock
+  listener live in the sigil repository.
+- **arca** — the FileChooser prompt binary. The portal locates `arca`
+  beside the backend or under the standard `bin` directories and invokes
+  `arca --chooser-prompt`; this is a runtime binary contract, not a source
+  dependency. An `arca` release that renames or drops the flag requires a
+  Portal change in the same window.
+
 ## Dependency Boundary
 
 | Concern | Portal ownership | Tessera ownership |
@@ -106,6 +122,6 @@ cargo tree --workspace
 ```
 
 The dependency tree and `Cargo.lock` must contain no Tessera repository source
-or internal Tessera crate. Then run the Meson packaging checks and the real
+or internal Tessera crate. Then run the packaging checks and the real
 runtime compatibility tests listed in the
 [Release Checklist](release-checklist.md).

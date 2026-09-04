@@ -1,10 +1,10 @@
-//! Routing regression: Print is served by Tessera.
+//! Routing regression: Print is served by atrium.
 
 const PORTAL_FILE: &str = include_str!("../../../contrib/xdg-desktop-portal/portals/atrium.portal");
 const PORTALS_CONF: &str = include_str!("../../../contrib/xdg-desktop-portal/atrium-portals.conf");
 
 #[test]
-fn print_is_served_by_tessera() {
+fn print_is_served_by_atrium() {
     let interface = "org.freedesktop.impl.portal.Print";
     let interfaces = PORTAL_FILE
         .lines()
@@ -17,6 +17,6 @@ fn print_is_served_by_tessera() {
     assert!(
         PORTALS_CONF
             .lines()
-            .any(|line| line == format!("{interface}=tessera"))
+            .any(|line| line == format!("{interface}=atrium"))
     );
 }

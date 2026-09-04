@@ -15,6 +15,37 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Removed the Meson packaging layer.** The workspace is pure Rust, so
+  `scripts/install.sh` now builds with Cargo and installs the two private
+  executables, the generated D-Bus service file, and the portal metadata,
+  honoring `DESTDIR` for staged packaging. The vestigial configure-time
+  `libpipewire`/`libspa` dependency checks are gone (nothing links them;
+  PipeWire remains a target-session runtime requirement). Meson remains a
+  CI dependency only for building the optics C libraries.
+- **Secret vault delegation to sigil (ADR-0020).** The portal delegates
+  secret storage, unlock, and lock-state authority to the sigil daemon and
+  owns only the `org.freedesktop.impl.portal.Secret` projection onto its
+  native IPC socket. The embedded vault, the `pam_atrium` PAM module, the
+  session-lock watcher, and the PAM token derivation are removed; sigil
+  owns `pam_sigil` and its logind lock listener. Deployments must run the
+  sigil daemon for the Secret portal to serve secrets.
+- The FileChooser prompt binary is now located as `arca`
+  (`arca --chooser-prompt`), following the Lantern → Arca rename.
+- Removed the Meson `pam` build option and the `pam` mode of
+  `scripts/meson-cargo-build.sh`.
+- Fixed the rename-commit drift in the test fixtures
+  (`default=tessera` → `default=atrium`, matching `UseIn=atrium`), which
+  had broken every public-frontend end-to-end test and every portal
+  routing metadata test.
+
+### Removed
+
+- The obsolete vault-related workspace dependencies (`argon2`,
+  `chacha20poly1305`, `hkdf`, `sha2`) and the unused dev-dependencies of
+  the backend crate.
+
 ## [0.0.27] - 2026-08-30
 
 ### Changed

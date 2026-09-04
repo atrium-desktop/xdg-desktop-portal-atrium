@@ -17,18 +17,12 @@ fail() {
     status=1
 }
 
-# ---- workspace version <-> meson <-> changelog --------------------------
+# ---- workspace version <-> changelog -------------------------------------
 cargo_version=$(
     sed -n 's/^version = "\([^"]*\)"$/\1/p' "$repo/Cargo.toml" | head -n 1
 )
-meson_version=$(
-    sed -n "s/^  version: '\([^']*\)',$/\1/p" "$repo/meson.build" | head -n 1
-)
 if [ -z "$cargo_version" ]; then
     fail "could not read workspace.package.version from Cargo.toml"
-fi
-if [ "$cargo_version" != "$meson_version" ]; then
-    fail "meson.build version $meson_version != Cargo.toml $cargo_version"
 fi
 
 latest_heading=$(sed -n 's/^## \[\([0-9][0-9.]*\)\] - .*/\1/p' \

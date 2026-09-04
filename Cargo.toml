@@ -30,12 +30,8 @@ image = { version = "0.25", default-features = false, features = [
 # Everything below is inherited by more than one crate; deny.toml audits
 # the workspace table as the single pinning point, so member manifests
 # must not restate versions.
-argon2 = "0.5"
 async-channel = "2"
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
 rand = "0.8"
-sha2 = "0.10"
 # The canonical build resolves the optics binding sources from the tagged
 # monorepo release. Joint development against a sibling optics checkout uses
 # .cargo/optics-local.toml without making the sibling checkout mandatory for

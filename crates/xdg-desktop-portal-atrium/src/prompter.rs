@@ -333,8 +333,13 @@ impl Drop for MlockGuard {
 /// The prompter executable's path: `$ATRIUM_PORTAL_PROMPTER`, then beside
 /// the backend, then the standard libexec directories. Shared by the
 /// one-shot invocation and the notification daemon spawn.
-pub(crate) fn prompt_command(request: &PrompterRequest) -> Result<(PathBuf, Vec<&'static str>), String> {
-    if matches!(request.prompt, atrium_portal_prompter::PromptRequest::FileChooser(_)) {
+pub(crate) fn prompt_command(
+    request: &PrompterRequest,
+) -> Result<(PathBuf, Vec<&'static str>), String> {
+    if matches!(
+        request.prompt,
+        atrium_portal_prompter::PromptRequest::FileChooser(_)
+    ) {
         if let Some(path) = std::env::var_os(FILE_CHOOSER_ENV).filter(|path| !path.is_empty()) {
             return Ok((PathBuf::from(path), vec!["--chooser-prompt"]));
         }
@@ -344,14 +349,14 @@ pub(crate) fn prompt_command(request: &PrompterRequest) -> Result<(PathBuf, Vec<
         if let Ok(current) = std::env::current_exe()
             && let Some(directory) = current.parent()
         {
-            let sibling = directory.join("lantern");
+            let sibling = directory.join("arca");
             if sibling.is_file() {
                 return Ok((sibling, vec!["--chooser-prompt"]));
             }
         }
         for installed in [
-            PathBuf::from("/usr/bin/lantern"),
-            PathBuf::from("/usr/local/bin/lantern"),
+            PathBuf::from("/usr/bin/arca"),
+            PathBuf::from("/usr/local/bin/arca"),
         ] {
             if installed.is_file() {
                 return Ok((installed, vec!["--chooser-prompt"]));
@@ -465,8 +470,10 @@ mod tests {
     }
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("tessera-prompter-unit-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "tessera-prompter-unit-{tag}-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

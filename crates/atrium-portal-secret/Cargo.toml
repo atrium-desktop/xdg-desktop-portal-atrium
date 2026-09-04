@@ -11,15 +11,8 @@ rust-version.workspace = true
 
 [dependencies]
 atrium-portal-runtime.workspace = true
-credential-client = { path = "../../../credentiald/crates/credential-client" }
-credential-core = { path = "../../../credentiald/crates/credential-core" }
-credential-crypto = { path = "../../../credentiald/crates/credential-crypto" }
-credential-store = { path = "../../../credentiald/crates/credential-store" }
-async-channel = { workspace = true }
-libc.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 zbus.workspace = true
-zeroize = { workspace = true, features = ["derive"] }

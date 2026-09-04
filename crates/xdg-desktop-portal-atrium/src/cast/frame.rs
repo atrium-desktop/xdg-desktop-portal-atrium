@@ -65,7 +65,8 @@ pub(crate) fn validate_frame(
     match (announced, frame.format, frame.payload) {
         (
             AnnouncedFormat::Shm(_),
-            atrium_portal_ipc::StreamPixelFormat::Bgra8 | atrium_portal_ipc::StreamPixelFormat::Rgba8,
+            atrium_portal_ipc::StreamPixelFormat::Bgra8
+            | atrium_portal_ipc::StreamPixelFormat::Rgba8,
             StreamPayload::Memfd(file),
         ) => {
             // The compositor's SHM readback is tightly packed.

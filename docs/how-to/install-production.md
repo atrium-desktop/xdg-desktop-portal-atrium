@@ -2,13 +2,12 @@
 
 ## Install Dependencies
 
-Install Rust 1.88 or newer, Meson, Ninja, `pkg-config`, the optics C
+Install Rust 1.88 or newer, `pkg-config`, the optics C
 libraries (flux, lens, and iris from the tagged `ming2k/optics` release),
-PipeWire and SPA development files, `xdg-desktop-portal`,
+`xdg-desktop-portal`,
 WirePlumber, and `xdg-email`. Inhibit additionally uses logind and Print
 uses the CUPS `lp` client at runtime; both are ordinary session services,
-not build dependencies. Install PAM
-development files only when the optional PAM module is required.
+not build dependencies.
 
 Install a Tessera runtime that implements the protocol version in the
 [Compatibility Reference](../reference/compatibility.md). The Portal build
@@ -19,47 +18,29 @@ does not require a Tessera source checkout, Cargo package, or path override.
 Run from the repository root:
 
 ```bash
-meson setup build --buildtype=release --prefix=/usr -Dpam=false
-meson compile -C build
-meson install -C build
+./scripts/install.sh --prefix /usr
 ```
 
-Set `DESTDIR` for a staged distribution package:
+Set `DESTDIR` for a staged distribution package (build once, then install
+from the existing `target/release` artifacts):
 
 ```bash
-DESTDIR="$PWD/stage" meson install -C build
+cargo build --locked --release -p xdg-desktop-portal-atrium -p atrium-portal-prompter
+DESTDIR="$PWD/stage" ./scripts/install.sh --prefix /usr --no-build
 ```
 
-Meson installs both private executables under the configured `libexecdir`,
-generates the matching D-Bus service, and installs `atrium.portal` plus
-`atrium-portals.conf` under the configured data directory.
+The install script places both private executables under the configured
+`libexecdir`, generates the matching D-Bus service, and installs
+`atrium.portal` plus `atrium-portals.conf` under the configured data
+directory.
 
-## Enable PAM Unlock
+## Enable Secret Storage and Vault Unlock
 
-Reconfigure and rebuild with PAM support:
-
-```bash
-meson setup build --reconfigure -Dpam=true
-meson compile -C build
-meson install -C build
-```
-
-Add the following lines to the PAM configuration. The `auth` line goes
-after the module that establishes the authentication token, the `session`
-line after the logind session module, and the `password` line after the
-module that sets the new authentication token. The exact files are
-display-manager specific.
-
-```text
-auth optional pam_atrium.so
-session optional pam_atrium.so
-password optional pam_atrium.so
-```
-
-Keep the control flag `optional`. `pam_atrium.so` never grants or denies
-authentication: the unlock token is planted only once the login is
-confirmed, and the `password` line lets the vault password follow login
-password changes.
+Secret retrieval delegates to the sigil daemon (ADR-0020). Install and
+enable the sigil service, which owns the at-rest vault, unlock prompting,
+and the logind session-lock binding; its PAM module (`pam_sigil`) provides
+login-time auto-unlock and vault password propagation. Configure and
+secure that module per the sigil installation guide.
 
 ## Restart the Portal Frontend
 
@@ -128,12 +109,7 @@ backend:
 
 ## Back Up or Migrate Secrets
 
-Stop the portal frontend before copying the vault, and copy the entire
-`$XDG_DATA_HOME/aegis/secrets` directory as one unit. Never restore
-`vault.enc` without its matching `vault.key`, or its matching `vault.kdf`
-/`vault.salt` pair for a password-mode vault.
-
-The production per-application key derivation rotates the shared value from
-the pre-production `v0.0.1` implementation. Applications that encrypted data
-with that value must recreate the encrypted data after upgrading. The vault
-files themselves stay in place.
+The vault is owned by the sigil daemon; back up and migrate it with the
+sigil tooling while the sigil service is stopped. Never restore vault
+files without their matching key material — see the sigil documentation
+for the authoritative procedures.

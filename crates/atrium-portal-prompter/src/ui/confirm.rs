@@ -69,41 +69,38 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
             f.flex(1.0);
             f.spacer(0.0);
 
-            f.row()
-                .gap(metrics::SPACE_S)
-                .items_center()
-                .show_flat(|f| {
-                    f.flex(1.0);
-                    f.spacer(0.0);
+            f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+                f.flex(1.0);
+                f.spacer(0.0);
 
-                    f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
-                    f.push_style(style::secondary_button_style_for(
-                        &state.appearance.palette(),
-                    ));
-                    let deny = state
-                        .request
-                        .deny_label
-                        .as_deref()
-                        .map(style::plain_label)
-                        .unwrap_or("Cancel");
-                    let cancel = f.button(deny);
-                    f.pop_style();
-                    if cancel {
-                        finish(state, ConfirmResponse::Cancelled);
-                        return;
-                    }
+                f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
+                f.push_style(style::secondary_button_style_for(
+                    &state.appearance.palette(),
+                ));
+                let deny = state
+                    .request
+                    .deny_label
+                    .as_deref()
+                    .map(style::plain_label)
+                    .unwrap_or("Cancel");
+                let cancel = f.button(deny);
+                f.pop_style();
+                if cancel {
+                    finish(state, ConfirmResponse::Cancelled);
+                    return;
+                }
 
-                    f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
-                    let accept = state
-                        .request
-                        .accept_label
-                        .as_deref()
-                        .map(style::plain_label)
-                        .unwrap_or("Continue");
-                    if f.button(accept) {
-                        finish(state, ConfirmResponse::Confirmed);
-                    }
-                });
+                f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
+                let accept = state
+                    .request
+                    .accept_label
+                    .as_deref()
+                    .map(style::plain_label)
+                    .unwrap_or("Continue");
+                if f.button(accept) {
+                    finish(state, ConfirmResponse::Confirmed);
+                }
+            });
         });
 }
 

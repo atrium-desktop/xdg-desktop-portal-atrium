@@ -8,8 +8,8 @@ documentation, and report security issues through
 
 ## Build and Test
 
-Install Rust 1.88 or newer (the minimum supported version), Meson, Ninja,
-`pkg-config`, the optics C libraries (flux, lens, and iris from the tagged
+Install Rust 1.88 or newer (the minimum supported version), `pkg-config`,
+the optics C libraries (flux, lens, and iris from the tagged
 `ming2k/optics` release), and the PipeWire and SPA development files, then
 run from the repository root:
 
@@ -71,7 +71,7 @@ cargo build --locked --release --workspace
 ```
 
 The clippy gate additionally runs on the 1.88 MSRV toolchain, and CI stages
-both Meson package variants (`-Dpam=false` and `-Dpam=true`). The required
+the installation script's package. The required
 end-to-end mode fails instead of skipping when `dbus-daemon`, the real
 `xdg-desktop-portal` frontend, PipeWire, WirePlumber, or the GStreamer
 PipeWire consumer is unavailable, so run it locally before pushing when the

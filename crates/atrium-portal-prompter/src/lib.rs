@@ -1282,8 +1282,10 @@ mod tests {
 
     #[test]
     fn save_files_avoids_duplicate_suggestions_in_one_request() {
-        let folder =
-            std::env::temp_dir().join(format!("tessera-prompter-duplicates-{}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!(
+            "tessera-prompter-duplicates-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&folder).unwrap();
         let mut req = request(FileChooserMode::SaveFiles);
         req.files = vec![

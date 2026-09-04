@@ -276,7 +276,9 @@ fn run_cast(
         CastSource::Monitor { output } => atrium_portal_ipc::StreamTarget::Output {
             output: output.clone(),
         },
-        CastSource::Window { window } => atrium_portal_ipc::StreamTarget::Window { window: *window },
+        CastSource::Window { window } => {
+            atrium_portal_ipc::StreamTarget::Window { window: *window }
+        }
     };
     let stream_info = client
         .start_output_stream(Some(STREAM_MAX_FPS), target.clone(), true, Some(cursor))

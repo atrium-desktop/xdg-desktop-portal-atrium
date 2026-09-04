@@ -319,20 +319,18 @@ fn card(state: &mut State, f: &mut Frame, index: usize) {
         .rounded(metrics::RADIUS)
         .id(&format!("card-{key}"))
         .show(|f| {
-            f.col()
-                .gap(metrics::SPACE_XXS)
-                .show_flat(|f| {
-                    if !notification.title.is_empty() {
-                        f.push_style(style::title_style());
-                        f.label(&truncate_to_width(f, &notification.title, width));
-                        f.pop_style();
-                    }
-                    if !notification.body.is_empty() {
-                        f.push_style(style::muted_style_for(&palette));
-                        f.label_wrapped(&notification.body, width.max(120.0));
-                        f.pop_style();
-                    }
-                });
+            f.col().gap(metrics::SPACE_XXS).show_flat(|f| {
+                if !notification.title.is_empty() {
+                    f.push_style(style::title_style());
+                    f.label(&truncate_to_width(f, &notification.title, width));
+                    f.pop_style();
+                }
+                if !notification.body.is_empty() {
+                    f.push_style(style::muted_style_for(&palette));
+                    f.label_wrapped(&notification.body, width.max(120.0));
+                    f.pop_style();
+                }
+            });
         });
     if response.clicked
         && let Some(action) = notification.default_action.clone()
@@ -346,30 +344,27 @@ fn card(state: &mut State, f: &mut Frame, index: usize) {
         return;
     }
 
-    f.row()
-        .gap(metrics::SPACE_S)
-        .items_center()
-        .show_flat(|f| {
-            for button in &notification.buttons {
-                if f.button(&button.label) {
-                    state.emit(NotifyEvent::ActionInvoked {
-                        app_id: notification.app_id.clone(),
-                        id: notification.id.clone(),
-                        action: button.action.clone(),
-                    });
-                    state.dismiss(index);
-                    return;
-                }
-            }
-            f.flex(1.0);
-            f.spacer(0.0);
-            f.push_style(style::secondary_button_style_for(&palette));
-            let dismiss = f.button("Dismiss");
-            f.pop_style();
-            if dismiss {
+    f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+        for button in &notification.buttons {
+            if f.button(&button.label) {
+                state.emit(NotifyEvent::ActionInvoked {
+                    app_id: notification.app_id.clone(),
+                    id: notification.id.clone(),
+                    action: button.action.clone(),
+                });
                 state.dismiss(index);
+                return;
             }
-        });
+        }
+        f.flex(1.0);
+        f.spacer(0.0);
+        f.push_style(style::secondary_button_style_for(&palette));
+        let dismiss = f.button("Dismiss");
+        f.pop_style();
+        if dismiss {
+            state.dismiss(index);
+        }
+    });
 }
 
 #[cfg(test)]

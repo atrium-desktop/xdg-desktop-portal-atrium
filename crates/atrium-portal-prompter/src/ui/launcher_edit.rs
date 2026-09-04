@@ -121,63 +121,57 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
             f.pop_style();
 
             // ---- name --------------------------------------------------
-            f.row()
-                .gap(metrics::SPACE_S)
-                .items_center()
-                .show_flat(|f| {
-                    f.label("Name:");
-                    f.flex(1.0);
-                    if state.request.editable_name {
-                        f.textfield_placeholder(NAME_FIELD, &mut state.name, "Launcher name");
-                        let response = f.response();
-                        state.name_field_focused = response.focused;
-                        if state.name_focus_pending {
-                            focus_widget(f, NAME_FIELD);
-                            state.name_focus_pending = false;
-                        }
-                    } else {
-                        f.label(&state.request.name.clone());
+            f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+                f.label("Name:");
+                f.flex(1.0);
+                if state.request.editable_name {
+                    f.textfield_placeholder(NAME_FIELD, &mut state.name, "Launcher name");
+                    let response = f.response();
+                    state.name_field_focused = response.focused;
+                    if state.name_focus_pending {
+                        focus_widget(f, NAME_FIELD);
+                        state.name_focus_pending = false;
                     }
-                });
+                } else {
+                    f.label(&state.request.name.clone());
+                }
+            });
 
             f.flex(1.0);
             f.spacer(0.0);
 
             // ---- footer buttons -----------------------------------------
-            f.row()
-                .gap(metrics::SPACE_S)
-                .items_center()
-                .show_flat(|f| {
-                    f.flex(1.0);
-                    f.spacer(0.0);
+            f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+                f.flex(1.0);
+                f.spacer(0.0);
 
-                    f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
-                    f.push_style(style::secondary_button_style_for(
+                f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
+                f.push_style(style::secondary_button_style_for(
+                    &state.appearance.palette(),
+                ));
+                let cancel = f.button("Cancel");
+                f.pop_style();
+                if cancel {
+                    finish(state, LauncherEditResponse::Cancelled);
+                    return;
+                }
+
+                f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
+                let name = current_name(state);
+                if let Some(name) = name {
+                    if f.button("Install") {
+                        finish(state, LauncherEditResponse::Saved { name });
+                    }
+                } else {
+                    // Build the disabled-looking button anyway so the
+                    // layout does not jump when a name appears.
+                    f.push_style(style::disabled_button_style_for(
                         &state.appearance.palette(),
                     ));
-                    let cancel = f.button("Cancel");
+                    f.button("Install");
                     f.pop_style();
-                    if cancel {
-                        finish(state, LauncherEditResponse::Cancelled);
-                        return;
-                    }
-
-                    f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
-                    let name = current_name(state);
-                    if let Some(name) = name {
-                        if f.button("Install") {
-                            finish(state, LauncherEditResponse::Saved { name });
-                        }
-                    } else {
-                        // Build the disabled-looking button anyway so the
-                        // layout does not jump when a name appears.
-                        f.push_style(style::disabled_button_style_for(
-                            &state.appearance.palette(),
-                        ));
-                        f.button("Install");
-                        f.pop_style();
-                    }
-                });
+                }
+            });
         });
 }
 

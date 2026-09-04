@@ -6,7 +6,8 @@ backend for the Tessera desktop. It translates freedesktop portal D-Bus
 requests into Portal-owned services and, only for compositor resources, a
 narrow projection of Tessera IPC (protocol 29, negotiating down to 24). It
 publishes ScreenCast streams
-through PipeWire and hosts the encrypted, per-application Secret portal.
+through PipeWire and routes the per-application Secret portal to the
+sigil secret service.
 
 The repository builds a D-Bus-activated backend plus an optics (iris/lens)
 UI host from a small Cargo workspace:
@@ -20,9 +21,9 @@ UI host from a small Cargo workspace:
   the launcher name editor, and Secret password input, and it hosts the
   long-lived notification daemon. It never connects to compositor IPC.
 - `atrium-portal-runtime` owns the shared portal Request lifecycle.
-- `atrium-portal-secret` owns the encrypted vault and native Secret backend.
-- `atrium-pam` optionally forwards a verified login password for vault
-  auto-unlock.
+- `atrium-portal-secret` projects the native Secret backend onto the
+  sigil daemon's IPC socket (ADR-0020); storage, unlock, and lock state
+  are sigil's responsibilities.
 
 ## Compatibility
 
@@ -38,9 +39,8 @@ dependency; see the
 
 ## Build
 
-Install Meson, the optics C libraries (flux/lens/iris, from the tagged
-`ming2k/optics` release), PipeWire, SPA, and `pkg-config` development
-packages, then run:
+Install Rust, the optics C libraries (flux/lens/iris, from the tagged
+`ming2k/optics` release), and `pkg-config`, then run:
 
 ```bash
 cargo build --locked --release --workspace
@@ -50,20 +50,20 @@ cargo test --locked --workspace
 Build and stage the production installation with:
 
 ```bash
-meson setup build --buildtype=release --prefix=/usr -Dpam=false
-meson compile -C build
-DESTDIR="$PWD/stage" meson install -C build
+cargo build --locked --release -p xdg-desktop-portal-atrium -p atrium-portal-prompter
+DESTDIR="$PWD/stage" ./scripts/install.sh --prefix /usr --no-build
 ```
 
-Meson installs both private executables under `libexecdir`, generates the
-D-Bus activation file with that exact path, and installs the portal metadata
-and routing configuration. The optional PAM module is enabled with
-`-Dpam=true`; it requires PAM development files. A production installation
-needs no other portal backend: every routed interface is served natively.
-See [How to Install for Production](docs/how-to/install-production.md).
+The install script places both private executables under `libexecdir`,
+generates the D-Bus activation file with that exact path, and installs the
+portal metadata and routing configuration. A production installation needs
+no other portal
+backend: every routed interface is served natively, and Secret retrieval
+additionally requires the sigil daemon. Vault auto-unlock and the vault
+password lifecycle are provided by sigil's own PAM module. See
+[How to Install for Production](docs/how-to/install-production.md).
 
-The repository's own source is MIT-licensed, including the optional
-`pam_atrium.so` module.
+The repository's source is MIT-licensed.
 
 ## Protocol Development
 

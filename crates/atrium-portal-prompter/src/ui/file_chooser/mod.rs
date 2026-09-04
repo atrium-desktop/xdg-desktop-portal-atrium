@@ -29,9 +29,7 @@ use atrium_portal_prompter::{
     BytePath, FileChooserMode, FileChooserRequest, FileChooserResponse, FileFilter,
     PromptAppearance, PromptResult,
 };
-use lens::{
-    Align, Band, Color, Frame, Input, PlaceMode, PlaceOpts, Rect, TextBuf, key, mods,
-};
+use lens::{Align, Band, Color, Frame, Input, PlaceMode, PlaceOpts, Rect, TextBuf, key, mods};
 use model::{
     Entry, History, Place, PlaceIcon, PlaceSection, breadcrumbs, common_prefix, expand_tilde,
     list_dir, normalize_lexical, split_dir_tail, typeahead_index, valid_filename,
@@ -945,11 +943,11 @@ fn handle_keys(state: &mut State, f: &mut Frame, input: &Input) {
         }
         return;
     }
-    if key_pressed(input, key::BACKSPACE) {
-        if let Some(parent) = state.dir.parent().map(Path::to_path_buf) {
-            state.navigate(parent);
-            return;
-        }
+    if key_pressed(input, key::BACKSPACE)
+        && let Some(parent) = state.dir.parent().map(Path::to_path_buf)
+    {
+        state.navigate(parent);
+        return;
     }
     if command_held(input) && key_pressed(input, ' ' as i32) && state.multiple_allowed() {
         toggle_focused(state);
@@ -1113,19 +1111,15 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                         state.folder_name.set("");
                     }
 
-                    let (more_clicked, more_rect) = icon_tool_button_rect(
-                        f,
-                        "more-menu-btn",
-                        &palette,
-                        true,
-                        |f| more_icon(f, metrics::ICON_SMALL),
-                    );
+                    let (more_clicked, more_rect) =
+                        icon_tool_button_rect(f, "more-menu-btn", &palette, true, |f| {
+                            more_icon(f, metrics::ICON_SMALL)
+                        });
                     state.more_btn_rect = more_rect;
                     if more_clicked {
                         f.place_toggle("more-menu");
                     }
-                },
-            );
+                });
             if state.location_editing
                 && let Some(error) = state.location_error.clone()
             {
@@ -1136,31 +1130,24 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
 
             // ---- new folder ---------------------------------------------
             if state.creating_folder {
-                f.row()
-                    .gap(metrics::SPACE_S)
-                    .items_center()
-                    .show_flat(|f| {
-                        f.label("Folder name:");
-                        f.size_next(260.0, metrics::FIELD_HEIGHT);
-                        f.textfield_placeholder(
-                            "folder-name",
-                            &mut state.folder_name,
-                            "New folder",
-                        );
-                        let response = f.response();
-                        state.folder_field_focused = response.focused;
-                        if state.folder_focus {
-                            focus_widget(f, "folder-name");
-                            state.folder_focus = false;
-                        }
-                        if response.clicked {
-                            create_folder(state);
-                        }
-                        f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
-                        if f.button("Create") {
-                            create_folder(state);
-                        }
-                    });
+                f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+                    f.label("Folder name:");
+                    f.size_next(260.0, metrics::FIELD_HEIGHT);
+                    f.textfield_placeholder("folder-name", &mut state.folder_name, "New folder");
+                    let response = f.response();
+                    state.folder_field_focused = response.focused;
+                    if state.folder_focus {
+                        focus_widget(f, "folder-name");
+                        state.folder_focus = false;
+                    }
+                    if response.clicked {
+                        create_folder(state);
+                    }
+                    f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
+                    if f.button("Create") {
+                        create_folder(state);
+                    }
+                });
                 if let Some(error) = state.folder_error.clone() {
                     f.push_style(style::error_style_for(&palette));
                     f.label_sized(&error, metrics::FONT_SMALL);
@@ -1170,27 +1157,24 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
 
             // ---- save name (SaveFile only) ------------------------------
             if state.request.mode == FileChooserMode::SaveFile {
-                f.row()
-                    .gap(metrics::SPACE_S)
-                    .items_center()
-                    .show_flat(|f| {
-                        f.label("Name:");
-                        f.flex(1.0);
-                        f.textfield_placeholder("save-name", &mut state.name, "File name");
-                        if state.name_caret_end {
-                            f.textfield_set_caret("save-name", u32::MAX);
-                            state.name_caret_end = false;
-                        }
-                        let response = f.response();
-                        state.name_field_focused = response.focused;
-                        if state.name_focus_pending {
-                            focus_widget(f, "save-name");
-                            state.name_focus_pending = false;
-                        }
-                        if response.clicked && accept_valid(state) {
-                            accept(state);
-                        }
-                    });
+                f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+                    f.label("Name:");
+                    f.flex(1.0);
+                    f.textfield_placeholder("save-name", &mut state.name, "File name");
+                    if state.name_caret_end {
+                        f.textfield_set_caret("save-name", u32::MAX);
+                        state.name_caret_end = false;
+                    }
+                    let response = f.response();
+                    state.name_field_focused = response.focused;
+                    if state.name_focus_pending {
+                        focus_widget(f, "save-name");
+                        state.name_focus_pending = false;
+                    }
+                    if response.clicked && accept_valid(state) {
+                        accept(state);
+                    }
+                });
             }
 
             // ---- places sidebar + directory listing + preview pane ------
@@ -1200,50 +1184,47 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                 .cross(Align::Stretch)
                 .show_flat(|f| {
                     // The places rail: clean, flat, and compact, separated from the browsing column by a hairline.
-                    f.col()
-                        .width(170.0)
-                        .cross(Align::Stretch)
-                        .show_flat(|f| {
-                            let standard_places: Vec<(usize, Place)> = state
-                                .places
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, p)| p.section == PlaceSection::Standard)
-                                .map(|(i, p)| (i, p.clone()))
-                                .collect();
+                    f.col().width(170.0).cross(Align::Stretch).show_flat(|f| {
+                        let standard_places: Vec<(usize, Place)> = state
+                            .places
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, p)| p.section == PlaceSection::Standard)
+                            .map(|(i, p)| (i, p.clone()))
+                            .collect();
 
-                            let pinned_places: Vec<(usize, Place)> = state
-                                .places
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, p)| p.section == PlaceSection::Pinned)
-                                .map(|(i, p)| (i, p.clone()))
-                                .collect();
+                        let pinned_places: Vec<(usize, Place)> = state
+                            .places
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, p)| p.section == PlaceSection::Pinned)
+                            .map(|(i, p)| (i, p.clone()))
+                            .collect();
 
-                            if !standard_places.is_empty() {
-                                sidebar_section_header(f, "PLACES", &palette);
-                            }
+                        if !standard_places.is_empty() {
+                            sidebar_section_header(f, "PLACES", &palette);
+                        }
 
-                            f.scroll("chooser-places", |f| {
-                                let content_w = 170.0 - 8.0;
-                                f.col().width(content_w).gap(1.0).show_flat(|f| {
-                                    for (index, place) in &standard_places {
+                        f.scroll("chooser-places", |f| {
+                            let content_w = 170.0 - 8.0;
+                            f.col().width(content_w).gap(1.0).show_flat(|f| {
+                                for (index, place) in &standard_places {
+                                    place_row(state, f, *index, place);
+                                }
+
+                                if !pinned_places.is_empty() || state.drag_active {
+                                    f.spacer(metrics::SPACE_XS);
+                                    sidebar_section_header(f, "PINNED", &palette);
+                                    for (index, place) in &pinned_places {
                                         place_row(state, f, *index, place);
                                     }
-
-                                    if !pinned_places.is_empty() || state.drag_active {
-                                        f.spacer(metrics::SPACE_XS);
-                                        sidebar_section_header(f, "PINNED", &palette);
-                                        for (index, place) in &pinned_places {
-                                            place_row(state, f, *index, place);
-                                        }
-                                        if state.drag_active {
-                                            drop_indicator(f, &palette);
-                                        }
+                                    if state.drag_active {
+                                        drop_indicator(f, &palette);
                                     }
-                                });
+                                }
                             });
                         });
+                    });
                     f.col()
                         .flex(1.0)
                         .cross(Align::Stretch)
@@ -1300,16 +1281,23 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                                             .items_center()
                                             .show_flat(|f| {
                                                 f.flex(1.0);
-                                                if f.selectable_icon(&entry.name, icon, is_selected) {
+                                                if f.selectable_icon(&entry.name, icon, is_selected)
+                                                {
                                                     clicked_idx = Some(idx);
                                                 }
                                                 f.size_next(100.0, metrics::ROW_HEIGHT);
                                                 f.push_style(style::muted_style_for(&palette));
-                                                f.label_sized(&entry.size_display(), metrics::FONT_SMALL);
+                                                f.label_sized(
+                                                    &entry.size_display(),
+                                                    metrics::FONT_SMALL,
+                                                );
                                                 f.pop_style();
                                                 f.size_next(160.0, metrics::ROW_HEIGHT);
                                                 f.push_style(style::muted_style_for(&palette));
-                                                f.label_sized(&entry.modified_display(), metrics::FONT_SMALL);
+                                                f.label_sized(
+                                                    &entry.modified_display(),
+                                                    metrics::FONT_SMALL,
+                                                );
                                                 f.pop_style();
                                             });
                                     }
@@ -1347,86 +1335,83 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
             }
 
             // ---- footer: filter + buttons --------------------------------
-            f.row()
-                .gap(metrics::SPACE_S)
-                .items_center()
-                .show_flat(|f| {
-                    if !state.filters.is_empty() {
-                        let mut labels: Vec<&str> = state
-                            .filters
-                            .iter()
-                            .map(|filter| filter.label.as_str())
-                            .collect();
-                        labels.truncate(16);
-                        let current_label = labels
-                            .get(state.filter_index.max(0) as usize)
-                            .copied()
-                            .unwrap_or("All files");
-                        let filter_label = format!("{current_label} ▾");
-                        if f.button(&filter_label) {
-                            f.place_toggle(FILTER_DROPDOWN);
-                        }
-                        let filter_rect = f.response().rect;
-                        f.place(
-                            FILTER_DROPDOWN,
-                            &PlaceOpts {
-                                mode: PlaceMode::Anchored,
-                                band: Band::Popup,
-                                rect: filter_rect,
-                                transient: true,
-                                ..Default::default()
-                            },
-                            |f| {
-                                f.col()
-                                    .bg(palette.surface)
-                                    .border(palette.border)
-                                    .border_width(1.0)
-                                    .radius(metrics::RADIUS)
-                                    .pad(4.0)
-                                    .show_flat(|f| {
-                                        for (idx, &label) in labels.iter().enumerate() {
-                                            if f.selectable(label, idx as i32 == state.filter_index) {
-                                                state.filter_index = idx as i32;
-                                                state.focus_index = None;
-                                                state.reload = true;
-                                                f.place_close(FILTER_DROPDOWN);
-                                            }
+            f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+                if !state.filters.is_empty() {
+                    let mut labels: Vec<&str> = state
+                        .filters
+                        .iter()
+                        .map(|filter| filter.label.as_str())
+                        .collect();
+                    labels.truncate(16);
+                    let current_label = labels
+                        .get(state.filter_index.max(0) as usize)
+                        .copied()
+                        .unwrap_or("All files");
+                    let filter_label = format!("{current_label} ▾");
+                    if f.button(&filter_label) {
+                        f.place_toggle(FILTER_DROPDOWN);
+                    }
+                    let filter_rect = f.response().rect;
+                    f.place(
+                        FILTER_DROPDOWN,
+                        &PlaceOpts {
+                            mode: PlaceMode::Anchored,
+                            band: Band::Popup,
+                            rect: filter_rect,
+                            transient: true,
+                            ..Default::default()
+                        },
+                        |f| {
+                            f.col()
+                                .bg(palette.surface)
+                                .border(palette.border)
+                                .border_width(1.0)
+                                .radius(metrics::RADIUS)
+                                .pad(4.0)
+                                .show_flat(|f| {
+                                    for (idx, &label) in labels.iter().enumerate() {
+                                        if f.selectable(label, idx as i32 == state.filter_index) {
+                                            state.filter_index = idx as i32;
+                                            state.focus_index = None;
+                                            state.reload = true;
+                                            f.place_close(FILTER_DROPDOWN);
                                         }
-                                    });
-                            },
-                        );
-                    }
+                                    }
+                                });
+                        },
+                    );
+                }
 
-                    f.flex(1.0);
-                    f.spacer(0.0);
+                f.flex(1.0);
+                f.spacer(0.0);
 
-                    f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
-                    f.push_style(style::secondary_button_style_for(&palette));
-                    let cancel = f.button("Cancel");
+                f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
+                f.push_style(style::secondary_button_style_for(&palette));
+                let cancel = f.button("Cancel");
+                f.pop_style();
+                if cancel {
+                    finish(state, FileChooserResponse::Cancelled);
+                    return;
+                }
+
+                f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
+                let label = state
+                    .request
+                    .accept_label
+                    .as_deref()
+                    .map(style::plain_label)
+                    .unwrap_or_else(|| default_accept_label(state.request.mode));
+                let valid = accept_valid(state);
+                if valid && state.done.is_none() && f.button(label) {
+                    accept(state);
+                } else if !valid {
+                    // Build the disabled-looking button anyway so the
+                    // layout does not jump when it becomes valid.
+                    f.push_style(style::disabled_button_style_for(&palette));
+                    f.button(label);
                     f.pop_style();
-                    if cancel {
-                        finish(state, FileChooserResponse::Cancelled);
-                        return;
-                    }
-
-                    f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
-                    let label = state
-                        .request
-                        .accept_label
-                        .as_deref()
-                        .map(style::plain_label)
-                        .unwrap_or_else(|| default_accept_label(state.request.mode));
-                    let valid = accept_valid(state);
-                    if valid && state.done.is_none() && f.button(label) {
-                        accept(state);
-                    } else if !valid {
-                        // Build the disabled-looking button anyway so the
-                        // layout does not jump when it becomes valid.
-                        f.push_style(style::disabled_button_style_for(&palette));
-                        f.button(label);
-                        f.pop_style();
-                    }
-                });
+                }
+            });
         });
 
     // ---- overwrite confirmation ----------------------------------------
@@ -1472,27 +1457,24 @@ fn build(state: &mut State, f: &mut Frame, input: &Input) {
                             "A file named \"{target_name}\" already exists. \
                              Do you want to replace it?"
                         ));
-                        f.row()
-                            .gap(metrics::SPACE_S)
-                            .items_center()
-                            .show_flat(|f| {
-                                f.flex(1.0);
-                                f.spacer(0.0);
-                                f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
-                                f.push_style(style::secondary_button_style_for(&palette));
-                                let cancel = f.button("Cancel");
-                                f.pop_style();
-                                if cancel {
-                                    f.place_close(OVERWRITE_MODAL);
-                                    state.confirm_overwrite = None;
-                                }
-                                f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
-                                if f.button("Replace") {
-                                    f.place_close(OVERWRITE_MODAL);
-                                    state.confirm_overwrite = None;
-                                    accept_checked(state, true);
-                                }
-                            });
+                        f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+                            f.flex(1.0);
+                            f.spacer(0.0);
+                            f.size_next(metrics::BUTTON_WIDTH, metrics::CONTROL_HEIGHT);
+                            f.push_style(style::secondary_button_style_for(&palette));
+                            let cancel = f.button("Cancel");
+                            f.pop_style();
+                            if cancel {
+                                f.place_close(OVERWRITE_MODAL);
+                                state.confirm_overwrite = None;
+                            }
+                            f.size_next(metrics::ACCEPT_WIDTH, metrics::CONTROL_HEIGHT);
+                            if f.button("Replace") {
+                                f.place_close(OVERWRITE_MODAL);
+                                state.confirm_overwrite = None;
+                                accept_checked(state, true);
+                            }
+                        });
                     });
             },
         );
@@ -1991,49 +1973,49 @@ fn choice_row(state: &mut State, f: &mut Frame, index: usize) {
         }
         ChoiceState::Options(selected) => {
             let popup_id = format!("choice-{}", choice.id);
-            f.row()
-                .gap(metrics::SPACE_S)
-                .items_center()
-                .show_flat(|f| {
-                    f.label(&choice.label);
-                    let labels: Vec<&str> = choice
-                        .options
-                        .iter()
-                        .map(|(_, label)| label.as_str())
-                        .collect();
-                    let current_label = labels.get((*selected).max(0) as usize).copied().unwrap_or("");
-                    if f.button(current_label) {
-                        f.place_toggle(&popup_id);
-                    }
-                    let btn_rect = f.response().rect;
-                    let palette = state.appearance.palette();
-                    f.place(
-                        &popup_id,
-                        &PlaceOpts {
-                            mode: PlaceMode::Anchored,
-                            band: Band::Popup,
-                            rect: btn_rect,
-                            transient: true,
-                            ..Default::default()
-                        },
-                        |f| {
-                            f.col()
-                                .bg(palette.surface)
-                                .border(palette.border)
-                                .border_width(1.0)
-                                .radius(metrics::RADIUS)
-                                .pad(4.0)
-                                .show_flat(|f| {
-                                    for (idx, &label) in labels.iter().enumerate() {
-                                        if f.selectable(label, idx as i32 == *selected) {
-                                            *selected = idx as i32;
-                                            f.place_close(&popup_id);
-                                        }
+            f.row().gap(metrics::SPACE_S).items_center().show_flat(|f| {
+                f.label(&choice.label);
+                let labels: Vec<&str> = choice
+                    .options
+                    .iter()
+                    .map(|(_, label)| label.as_str())
+                    .collect();
+                let current_label = labels
+                    .get((*selected).max(0) as usize)
+                    .copied()
+                    .unwrap_or("");
+                if f.button(current_label) {
+                    f.place_toggle(&popup_id);
+                }
+                let btn_rect = f.response().rect;
+                let palette = state.appearance.palette();
+                f.place(
+                    &popup_id,
+                    &PlaceOpts {
+                        mode: PlaceMode::Anchored,
+                        band: Band::Popup,
+                        rect: btn_rect,
+                        transient: true,
+                        ..Default::default()
+                    },
+                    |f| {
+                        f.col()
+                            .bg(palette.surface)
+                            .border(palette.border)
+                            .border_width(1.0)
+                            .radius(metrics::RADIUS)
+                            .pad(4.0)
+                            .show_flat(|f| {
+                                for (idx, &label) in labels.iter().enumerate() {
+                                    if f.selectable(label, idx as i32 == *selected) {
+                                        *selected = idx as i32;
+                                        f.place_close(&popup_id);
                                     }
-                                });
-                        },
-                    );
-                });
+                                }
+                            });
+                    },
+                );
+            });
         }
     }
 }

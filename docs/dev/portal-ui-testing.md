@@ -20,7 +20,7 @@ UI renders in one of those two places.
 | `Background.RequestBackground` | Consent dialog naming the reason and autostart | Prompter |
 | `Wallpaper.SetWallpaperURI` with `show-preview=true` | Confirmation dialog naming the image file | Prompter |
 | `Notification.AddNotification` | Cards in the notification daemon's window | Prompter (daemon mode) |
-| Secret vault unlock | Masked password prompt | Prompter |
+| Secret vault unlock | Masked password prompt | Prompter (capability retained; the Secret portal currently delegates unlock prompting to sigil, ADR-0020) |
 | `Screenshot.Screenshot` with `interactive=true` | Region picker | Compositor chrome |
 | `Screenshot.PickColor` | Crosshair pixel picker | Compositor chrome |
 | `ScreenCast` `SelectSources` | Source picker and capture consent | Compositor chrome |

@@ -1,10 +1,10 @@
-//! Routing regression: AppChooser is served by Tessera.
+//! Routing regression: AppChooser is served by atrium.
 
 const PORTAL_FILE: &str = include_str!("../../../contrib/xdg-desktop-portal/portals/atrium.portal");
 const PORTALS_CONF: &str = include_str!("../../../contrib/xdg-desktop-portal/atrium-portals.conf");
 
 #[test]
-fn app_chooser_is_served_by_tessera() {
+fn app_chooser_is_served_by_atrium() {
     let interfaces = PORTAL_FILE
         .lines()
         .find_map(|line| line.strip_prefix("Interfaces="))
@@ -18,6 +18,6 @@ fn app_chooser_is_served_by_tessera() {
     assert!(
         PORTALS_CONF
             .lines()
-            .any(|line| line == "org.freedesktop.impl.portal.AppChooser=tessera")
+            .any(|line| line == "org.freedesktop.impl.portal.AppChooser=atrium")
     );
 }
