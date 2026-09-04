@@ -15,6 +15,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.29] - 2026-09-05
+
+### Changed
+
+- Version bump for companion ecosystem alignment (optics v0.0.34, headless contract stability).
+
 ## [0.0.28] - 2026-09-04
 
 ### Changed
