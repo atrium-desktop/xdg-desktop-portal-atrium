@@ -216,7 +216,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atrium-portal-ipc"
-version = "0.0.27"
+version = "0.0.28"
 dependencies = [
  "libc",
  "serde",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-prompter"
-version = "0.0.27"
+version = "0.0.28"
 dependencies = [
  "env_logger",
  "flux-sys",
@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-runtime"
-version = "0.0.27"
+version = "0.0.28"
 dependencies = [
  "async-channel",
  "log",
@@ -254,7 +254,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-secret"
-version = "0.0.27"
+version = "0.0.28"
 dependencies = [
  "atrium-portal-runtime",
  "log",
@@ -1772,7 +1772,7 @@ dependencies = [
 
 [[package]]
 name = "xdg-desktop-portal-atrium"
-version = "0.0.27"
+version = "0.0.28"
 dependencies = [
  "async-channel",
  "atrium-portal-ipc",

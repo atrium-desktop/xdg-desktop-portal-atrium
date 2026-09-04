@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.28] - 2026-09-04
+
 ### Changed
 
 - **Removed the Meson packaging layer.** The workspace is pure Rust, so
@@ -738,8 +740,9 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/compare/v0.0.27...HEAD
-[0.0.27]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.27
+[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.28...HEAD
+[0.0.28]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.27...v0.0.28
+[0.0.27]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/releases/tag/v0.0.27
 [0.0.26]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.26
 [0.0.25]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.25
 [0.0.24]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.24
