@@ -15,6 +15,17 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Tessera desktop portal configuration (`tessera-portals.conf`).** Added canonical
+  `tessera-portals.conf` routing configuration to match `XDG_CURRENT_DESKTOP=tessera`
+  exported by the Tessera compositor, while retaining `atrium-portals.conf` compatibility.
+- Declared `UseIn=tessera;atrium;` in `contrib/xdg-desktop-portal/portals/atrium.portal`
+  so `xdg-desktop-portal` frontend discovers and admits the Atrium portal backend
+  under standard Tessera sessions.
+- Updated `scripts/install.sh` to install `tessera-portals.conf` alongside `atrium.portal`
+  and `atrium-portals.conf`.
+
 ## [0.0.29] - 2026-09-05
 
 ### Changed
@@ -755,7 +766,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.28...HEAD
+[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.29...HEAD
+[0.0.29]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.28...v0.0.29
 [0.0.28]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.27...v0.0.28
 [0.0.27]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/releases/tag/v0.0.27
 [0.0.26]: https://github.com/aegis-shell/xdg-desktop-portal-aegis/releases/tag/v0.0.26

@@ -22,6 +22,6 @@ printf '%s\n' \
     '' \
     'The pre-commit hook now runs on every commit in this clone.' \
     'It rejects staged Cargo.toml/Cargo.lock changes that would make the' \
-    'Portal depend on the Tessera source repository (aegis-shell/tessera git' \
-    'dependencies or ../tessera path dependencies); use the Portal-owned' \
-    'atrium-portal-ipc wire projection instead.'
+    'Portal depend on companion source repositories (tessera, arca, sigil' \
+    'git dependencies or ../ path dependencies); use the Portal-owned' \
+    'wire projections and runtime contracts instead.'

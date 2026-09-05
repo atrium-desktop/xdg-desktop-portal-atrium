@@ -31,8 +31,8 @@ DESTDIR="$PWD/stage" ./scripts/install.sh --prefix /usr --no-build
 
 The install script places both private executables under the configured
 `libexecdir`, generates the matching D-Bus service, and installs
-`atrium.portal` plus `atrium-portals.conf` under the configured data
-directory.
+`atrium.portal` plus `tessera-portals.conf` (with `atrium-portals.conf` compatibility)
+under the configured data directory.
 
 ## Enable Secret Storage and Vault Unlock
 
@@ -96,7 +96,7 @@ backend:
    `portals.conf` or `*-portals.conf` files naming `tessera;gtk` under
    `/usr/share/xdg-desktop-portal/`, `/etc/xdg/xdg-desktop-portal/`, and
    `~/.config/xdg-desktop-portal/`. The new package installs
-   `atrium-portals.conf` with `tessera`-only routes; remove hand-written
+   `tessera-portals.conf` (and `atrium-portals.conf`) with `atrium`-only routes; remove hand-written
    overrides rather than editing the packaged file.
 3. Install the new package as in [Build and Install](#build-and-install).
 4. Restart the frontend as in

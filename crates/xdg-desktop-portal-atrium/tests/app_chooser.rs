@@ -1,7 +1,7 @@
 //! Routing regression: AppChooser is served by atrium.
 
 const PORTAL_FILE: &str = include_str!("../../../contrib/xdg-desktop-portal/portals/atrium.portal");
-const PORTALS_CONF: &str = include_str!("../../../contrib/xdg-desktop-portal/atrium-portals.conf");
+const PORTALS_CONF: &str = include_str!("../../../contrib/xdg-desktop-portal/tessera-portals.conf");
 
 #[test]
 fn app_chooser_is_served_by_atrium() {

@@ -74,6 +74,8 @@ install -Dm644 "$service_tmp" "$service"
 
 install -Dm644 "$repo/contrib/xdg-desktop-portal/portals/atrium.portal" \
     "$stage$data/xdg-desktop-portal/portals/atrium.portal"
+install -Dm644 "$repo/contrib/xdg-desktop-portal/tessera-portals.conf" \
+    "$stage$data/xdg-desktop-portal/tessera-portals.conf"
 install -Dm644 "$repo/contrib/xdg-desktop-portal/atrium-portals.conf" \
     "$stage$data/xdg-desktop-portal/atrium-portals.conf"
 
@@ -82,5 +84,6 @@ printf '  %s\n' \
     "$libexec/xdg-desktop-portal-atrium" \
     "$data/dbus-1/services/org.freedesktop.impl.portal.desktop.atrium.service" \
     "$data/xdg-desktop-portal/portals/atrium.portal" \
+    "$data/xdg-desktop-portal/tessera-portals.conf" \
     "$data/xdg-desktop-portal/atrium-portals.conf"
 [ -z "$stage" ] || printf 'staged under %s\n' "$stage"

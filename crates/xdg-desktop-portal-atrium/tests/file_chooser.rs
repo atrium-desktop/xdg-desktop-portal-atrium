@@ -351,10 +351,15 @@ fn public_frontend_routes_file_chooser_and_returns_response() {
     std::fs::write(
         // 1.18 only consults the desktop-specific filename when
         // XDG_CURRENT_DESKTOP is non-empty. Mirror the installed package.
-        config_dir.join("atrium-portals.conf"),
+        config_dir.join("tessera-portals.conf"),
         "[preferred]\ndefault=atrium\norg.freedesktop.impl.portal.FileChooser=atrium\n",
     )
     .expect("stage frontend routing");
+    std::fs::write(
+        config_dir.join("atrium-portals.conf"),
+        "[preferred]\ndefault=atrium\norg.freedesktop.impl.portal.FileChooser=atrium\n",
+    )
+    .expect("stage frontend routing compatibility");
 
     let prompter = fake_prompter(&fixture_dir);
     write_response(
@@ -387,7 +392,7 @@ fn public_frontend_routes_file_chooser_and_returns_response() {
     let mut frontend_command = Command::new(frontend);
     frontend_command
         .env("DBUS_SESSION_BUS_ADDRESS", bus.address())
-        .env("XDG_CURRENT_DESKTOP", "atrium")
+        .env("XDG_CURRENT_DESKTOP", "tessera")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &frontend_data)
         // xdg-desktop-portal 1.18 discovers test backends through this

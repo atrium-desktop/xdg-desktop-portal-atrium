@@ -456,11 +456,27 @@ pub fn run() -> Result<(), PortalError> {
 mod integration_metadata_tests {
     const PORTAL_FILE: &str =
         include_str!("../../../contrib/xdg-desktop-portal/portals/atrium.portal");
-    const PORTALS_CONF: &str =
+    const TESSERA_PORTALS_CONF: &str =
+        include_str!("../../../contrib/xdg-desktop-portal/tessera-portals.conf");
+    const ATRIUM_PORTALS_CONF: &str =
         include_str!("../../../contrib/xdg-desktop-portal/atrium-portals.conf");
     const DBUS_SERVICE: &str = include_str!(
         "../../../contrib/dbus-1/services/org.freedesktop.impl.portal.desktop.atrium.service.in"
     );
+
+    #[test]
+    fn portal_metadata_declares_use_in_tessera_and_atrium() {
+        let use_in = PORTAL_FILE
+            .lines()
+            .find_map(|line| line.strip_prefix("UseIn="))
+            .expect("portal metadata must declare UseIn");
+        let desktops: Vec<_> = use_in
+            .split(';')
+            .filter(|entry| !entry.is_empty())
+            .collect();
+        assert!(desktops.contains(&"tessera"), "UseIn must declare tessera");
+        assert!(desktops.contains(&"atrium"), "UseIn must declare atrium");
+    }
 
     #[test]
     fn capability_file_advertises_exactly_the_served_interfaces() {
@@ -498,46 +514,48 @@ mod integration_metadata_tests {
 
     #[test]
     fn atrium_is_the_sole_backend_without_a_gtk_fallback() {
-        assert!(
-            PORTALS_CONF.lines().any(|line| line == "default=atrium"),
-            "the routing default is Tessera alone"
-        );
-        assert!(
-            !PORTALS_CONF.to_lowercase().contains("gtk"),
-            "no GTK fallback route or comment remains in the routing config"
-        );
-        for interface in [
-            "Settings",
-            "Screenshot",
-            "ScreenCast",
-            "Secret",
-            "Lockdown",
-            "FileChooser",
-            "Email",
-            "Account",
-            "Access",
-            "AppChooser",
-            "OpenURI",
-            "Background",
-            "DynamicLauncher",
-            "Inhibit",
-            "Notification",
-            "Wallpaper",
-            "Print",
-        ] {
-            let route = format!("org.freedesktop.impl.portal.{interface}=atrium");
+        for conf in [TESSERA_PORTALS_CONF, ATRIUM_PORTALS_CONF] {
             assert!(
-                PORTALS_CONF.lines().any(|line| line.starts_with(&route)),
-                "missing explicit Tessera route for {interface}"
+                conf.lines().any(|line| line == "default=atrium"),
+                "the routing default is Tessera alone"
             );
-        }
-        // Every interface routes to Tessera alone; no fallback backend exists.
-        for line in PORTALS_CONF.lines() {
-            if line.starts_with("org.freedesktop.") {
+            assert!(
+                !conf.to_lowercase().contains("gtk"),
+                "no GTK fallback route or comment remains in the routing config"
+            );
+            for interface in [
+                "Settings",
+                "Screenshot",
+                "ScreenCast",
+                "Secret",
+                "Lockdown",
+                "FileChooser",
+                "Email",
+                "Account",
+                "Access",
+                "AppChooser",
+                "OpenURI",
+                "Background",
+                "DynamicLauncher",
+                "Inhibit",
+                "Notification",
+                "Wallpaper",
+                "Print",
+            ] {
+                let route = format!("org.freedesktop.impl.portal.{interface}=atrium");
                 assert!(
-                    line.ends_with("=atrium"),
-                    "unexpected non-Tessera route: {line}"
+                    conf.lines().any(|line| line.starts_with(&route)),
+                    "missing explicit Tessera route for {interface}"
                 );
+            }
+            // Every interface routes to Tessera alone; no fallback backend exists.
+            for line in conf.lines() {
+                if line.starts_with("org.freedesktop.") {
+                    assert!(
+                        line.ends_with("=atrium"),
+                        "unexpected non-Tessera route: {line}"
+                    );
+                }
             }
         }
     }

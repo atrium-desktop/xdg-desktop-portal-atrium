@@ -89,6 +89,8 @@ jobs:
           grep -Fx 'Exec=/usr/libexec/xdg-desktop-portal-atrium' \
             stage/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.atrium.service
           test -z "$(find stage -path '*pam*' -print -quit)"
+          test -f stage/usr/share/xdg-desktop-portal/tessera-portals.conf
+          test -f stage/usr/share/xdg-desktop-portal/atrium-portals.conf
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@0.8.7

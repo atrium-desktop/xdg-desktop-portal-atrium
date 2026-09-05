@@ -188,10 +188,15 @@ fn public_frontend_translates_attachment_fds_for_the_backend() {
     std::fs::write(
         // 1.18 only consults the desktop-specific filename when
         // XDG_CURRENT_DESKTOP is non-empty. Mirror the installed package.
-        config_dir.join("atrium-portals.conf"),
+        config_dir.join("tessera-portals.conf"),
         "[preferred]\ndefault=atrium\norg.freedesktop.impl.portal.Email=atrium\n",
     )
     .expect("stage frontend routing");
+    std::fs::write(
+        config_dir.join("atrium-portals.conf"),
+        "[preferred]\ndefault=atrium\norg.freedesktop.impl.portal.Email=atrium\n",
+    )
+    .expect("stage frontend routing compatibility");
 
     let record_file = runtime_dir.join("public-mailer-args.txt");
     let backend_log = root.join("backend.log");
@@ -228,7 +233,7 @@ fn public_frontend_translates_attachment_fds_for_the_backend() {
     let mut frontend_command = Command::new(frontend);
     frontend_command
         .env("DBUS_SESSION_BUS_ADDRESS", bus.address())
-        .env("XDG_CURRENT_DESKTOP", "atrium")
+        .env("XDG_CURRENT_DESKTOP", "tessera")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &frontend_data)
         // xdg-desktop-portal 1.18 discovers test backends through this

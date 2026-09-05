@@ -5,9 +5,9 @@ added_lines=$(git diff --cached --unified=0 -- Cargo.toml Cargo.lock .cargo ':gl
     sed -n 's/^+//p')
 
 if printf '%s\n' "$added_lines" |
-    grep -Eq 'aegis-shell/tessera|path[[:space:]]*=[[:space:]]*"\.\./tessera'; then
+    grep -Eq 'aegis-shell/tessera|path[[:space:]]*=[[:space:]]*"\.\./(tessera|arca|sigil)'; then
     printf '%s\n' \
-        "Portal builds must not depend on the Tessera source repository." \
-        "Use the Portal-owned atrium-portal-ipc wire projection instead."
+        "Portal builds must not depend on companion source repositories (tessera, arca, sigil)." \
+        "Use Portal-owned wire projections or runtime binary contracts instead."
     exit 1
 fi
