@@ -15,6 +15,18 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.31] - 2026-09-05
+
+### Added
+
+- **Stateless deterministic secret pipeline and memory hardening ([ADR-0022](docs/adr/0022-stateless-deterministic-secret-pipeline-and-memory-hardening.md)).**
+  Application secret memory buffers are wrapped in `zeroize::Zeroizing` to ensure
+  deterministic zeroization upon pipe transfer completion or drop.
+- **Resilient FileChooser option decoding.** Extended `files`, `current_file`, and
+  `current_name` option parsers to accept both byte arrays (`ay`) and UTF-8 strings (`s`).
+- **PATH-based `arca` binary discovery.** The FileChooser prompter runner now searches
+  the runtime `$PATH` in addition to sibling and standard system directories.
+
 ## [0.0.30] - 2026-09-05
 
 ### Added
@@ -768,7 +780,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.30...HEAD
+[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.31...HEAD
+[0.0.31]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.30...v0.0.31
 [0.0.30]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.29...v0.0.30
 [0.0.29]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.28...v0.0.29
 [0.0.28]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.27...v0.0.28
