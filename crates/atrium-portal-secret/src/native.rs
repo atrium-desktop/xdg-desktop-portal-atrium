@@ -14,6 +14,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 /// The default socket subpath under `$XDG_RUNTIME_DIR`, matching the sigil
 /// daemon's own default.
@@ -99,12 +100,15 @@ impl SigilConnection {
     /// purpose)`. Each call opens its own connection, matching the sigil
     /// client's connect-per-request pattern and the daemon's framing
     /// state machine.
+    ///
+    /// The returned secret is wrapped in [`Zeroizing`] so it is deterministically
+    /// wiped from process memory when dropped (ADR-0022).
     pub fn get_application_secret(
         &self,
         namespace: &str,
         subject: &str,
         purpose: &str,
-    ) -> Result<Vec<u8>, NativeError> {
+    ) -> Result<Zeroizing<Vec<u8>>, NativeError> {
         let mut stream = UnixStream::connect(&self.socket_path)?;
         let request = serde_json::to_vec(&NativeRequest::GetApplicationSecret {
             namespace,
@@ -120,7 +124,7 @@ impl SigilConnection {
             NativeError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
         })?;
         match response {
-            NativeResponse::Secret(bytes) => Ok(bytes),
+            NativeResponse::Secret(bytes) => Ok(Zeroizing::new(bytes)),
             NativeResponse::Locked => Err(NativeError::Locked),
             NativeResponse::Cancelled => Err(NativeError::Cancelled),
             NativeResponse::AccessDenied(reason) => Err(NativeError::AccessDenied(reason)),
@@ -142,7 +146,7 @@ fn write_frame(stream: &mut UnixStream, payload: &[u8]) -> Result<(), NativeErro
     Ok(())
 }
 
-fn read_frame(stream: &mut UnixStream) -> Result<Vec<u8>, NativeError> {
+fn read_frame(stream: &mut UnixStream) -> Result<Zeroizing<Vec<u8>>, NativeError> {
     let mut len_bytes = [0u8; 4];
     stream.read_exact(&mut len_bytes)?;
     let len = u32::from_be_bytes(len_bytes) as usize;
@@ -152,7 +156,7 @@ fn read_frame(stream: &mut UnixStream) -> Result<Vec<u8>, NativeError> {
             "response frame exceeds the sigil frame limit",
         )));
     }
-    let mut payload = vec![0u8; len];
+    let mut payload = Zeroizing::new(vec![0u8; len]);
     stream.read_exact(&mut payload)?;
     Ok(payload)
 }

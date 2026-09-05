@@ -246,6 +246,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "zbus",
+ "zeroize",
 ]
 
 [[package]]

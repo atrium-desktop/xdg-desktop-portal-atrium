@@ -272,8 +272,14 @@ fn invoke_raw(
     let _response_lock = MlockGuard::new(&bytes);
     let decoded = serde_json::from_slice(&bytes);
     let response: PrompterResponse = decoded.map_err(|error| {
+        let stdout_lossy = String::from_utf8_lossy(&bytes);
+        let preview = if stdout_lossy.len() > 256 {
+            format!("{}...", &stdout_lossy[..256])
+        } else {
+            stdout_lossy.into_owned()
+        };
         InvokeError::Failed(format!(
-            "prompter exited with {status} and returned invalid JSON: {error}"
+            "prompter exited with {status} and returned invalid JSON: {error}; stdout was: {preview:?}"
         ))
     })?;
     match response.into_result().map_err(InvokeError::Failed)? {
@@ -354,14 +360,25 @@ pub(crate) fn prompt_command(
                 return Ok((sibling, vec!["--chooser-prompt"]));
             }
         }
+        if let Some(paths) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&paths) {
+                let candidate = dir.join("arca");
+                if candidate.is_file() {
+                    return Ok((candidate, vec!["--chooser-prompt"]));
+                }
+            }
+        }
         for installed in [
-            PathBuf::from("/usr/bin/arca"),
             PathBuf::from("/usr/local/bin/arca"),
+            PathBuf::from("/usr/bin/arca"),
         ] {
             if installed.is_file() {
                 return Ok((installed, vec!["--chooser-prompt"]));
             }
         }
+        return Err(format!(
+            "arca was not found in PATH or standard bin directories; install arca or set {FILE_CHOOSER_ENV}"
+        ));
     }
     executable().map(|path| (path, Vec::new()))
 }

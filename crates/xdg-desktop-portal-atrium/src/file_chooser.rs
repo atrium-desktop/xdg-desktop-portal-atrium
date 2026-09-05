@@ -343,9 +343,18 @@ fn parse_options(options: &HashMap<String, Value<'_>>) -> ParsedOptions {
             .unwrap_or(default)
     };
     let get_string = |key: &str| {
-        options
-            .get(key)
-            .and_then(|value| String::try_from(value).ok())
+        options.get(key).and_then(|value| {
+            if let Ok(s) = String::try_from(value) {
+                Some(s)
+            } else if let Ok(mut bytes) = Vec::<u8>::try_from(value.clone()) {
+                if bytes.last() == Some(&0) {
+                    bytes.pop();
+                }
+                String::from_utf8(bytes).ok()
+            } else {
+                None
+            }
+        })
     };
     let get_path = |key: &str| {
         options
@@ -385,11 +394,22 @@ fn parse_options(options: &HashMap<String, Value<'_>>) -> ParsedOptions {
         .collect();
     let save_files = options
         .get("files")
-        .and_then(|value| Vec::<Vec<u8>>::try_from(value.try_clone().ok()?).ok())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(byte_path)
-        .collect();
+        .and_then(|value| {
+            if let Ok(paths) = Vec::<Vec<u8>>::try_from(value.try_clone().ok()?) {
+                Some(paths.into_iter().filter_map(byte_path).collect())
+            } else if let Ok(strings) = Vec::<String>::try_from(value.try_clone().ok()?) {
+                Some(
+                    strings
+                        .into_iter()
+                        .filter(|s| !s.is_empty() && !s.contains('\0'))
+                        .map(|s| BytePath(s.into_bytes()))
+                        .collect(),
+                )
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
 
     ParsedOptions {
         modal: get_bool("modal", true),
@@ -550,6 +570,60 @@ mod tests {
             panic!("choices must be an array");
         };
         assert_eq!(choices.len(), 1);
+    }
+
+    #[test]
+    fn save_files_accepts_strings_and_byte_arrays() {
+        let parsed_strings = parse_options(&options(&[(
+            "files",
+            Value::from(vec!["doc.txt".to_owned(), "photo.png".to_owned()]),
+        )]));
+        assert_eq!(parsed_strings.save_files.len(), 2);
+        assert_eq!(
+            parsed_strings.save_files[0].to_path_buf(),
+            PathBuf::from("doc.txt")
+        );
+        assert_eq!(
+            parsed_strings.save_files[1].to_path_buf(),
+            PathBuf::from("photo.png")
+        );
+
+        let parsed_bytes = parse_options(&options(&[(
+            "files",
+            Value::from(vec![b"one.txt\0".to_vec(), b"two.txt\0".to_vec()]),
+        )]));
+        assert_eq!(parsed_bytes.save_files.len(), 2);
+        assert_eq!(
+            parsed_bytes.save_files[0].to_path_buf(),
+            PathBuf::from("one.txt")
+        );
+        assert_eq!(
+            parsed_bytes.save_files[1].to_path_buf(),
+            PathBuf::from("two.txt")
+        );
+    }
+
+    #[test]
+    fn current_file_and_current_name_accept_resilient_types() {
+        let parsed = parse_options(&options(&[
+            ("current_file", Value::from(b"/tmp/input.png\0".to_vec())),
+            ("current_name", Value::from("output.png".to_owned())),
+        ]));
+        assert_eq!(
+            parsed.current_file.unwrap().to_path_buf(),
+            PathBuf::from("/tmp/input.png")
+        );
+        assert_eq!(parsed.current_name.as_deref(), Some("output.png"));
+
+        let parsed_bytes_name = parse_options(&options(&[
+            ("current_file", Value::from(b"/tmp/other.png\0".to_vec())),
+            ("current_name", Value::from(b"named.png\0".to_vec())),
+        ]));
+        assert_eq!(
+            parsed_bytes_name.current_file.unwrap().to_path_buf(),
+            PathBuf::from("/tmp/other.png")
+        );
+        assert_eq!(parsed_bytes_name.current_name.as_deref(), Some("named.png"));
     }
 
     #[test]

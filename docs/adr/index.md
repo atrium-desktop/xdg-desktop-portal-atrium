@@ -23,3 +23,4 @@
 | [0019](0019-vault-lock-follows-the-session-lock-boundary.md) | The vault lock state follows the session lock boundary | Accepted (implementation owned by sigil, see [0020](0020-secret-vault-delegation-to-sigil.md)) |
 | [0020](0020-secret-vault-delegation-to-sigil.md) | Secret vault delegation to sigil | Accepted |
 | [0021](0021-headless-portal-and-optics-retirement.md) | Headless portal architecture, prompt delegation to companion components, and optics retirement | Accepted |
+| [0022](0022-stateless-deterministic-secret-pipeline-and-memory-hardening.md) | Stateless deterministic secret pipeline and zero-trace memory hardening | Accepted |

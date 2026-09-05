@@ -89,6 +89,10 @@ impl SecretIface {
                 let raw = owned_fd.into_raw_fd();
                 let mut file = unsafe { File::from_raw_fd(raw) };
                 let write_res = file.write_all(secret.as_slice());
+                // Explicitly drop and zeroize the transient in-memory secret bytes
+                // immediately after writing to the destination fd (ADR-0022).
+                drop(secret);
+
                 // Only regular files can fsync; the caller-supplied fd may
                 // be a pipe, which rejects fsync with EINVAL.
                 let sync_res = match file.metadata() {

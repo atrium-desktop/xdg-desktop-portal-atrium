@@ -1,6 +1,6 @@
 //! `org.freedesktop.impl.portal.Inhibit` v3, backed by logind.
 //!
-//! The honest mechanism available to a non-GNOME compositor session is
+//! The honest mechanism available to a Tessera compositor session is
 //! `org.freedesktop.login1.Manager.Inhibit`: holding the returned
 //! descriptor inhibits, closing it releases. Portal flags map as follows:
 //!
