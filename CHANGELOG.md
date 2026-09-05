@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.30] - 2026-09-05
+
 ### Added
 
 - **Tessera desktop portal configuration (`tessera-portals.conf`).** Added canonical
@@ -766,7 +768,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.29...HEAD
+[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.30...HEAD
+[0.0.30]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.29...v0.0.30
 [0.0.29]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.28...v0.0.29
 [0.0.28]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.27...v0.0.28
 [0.0.27]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/releases/tag/v0.0.27

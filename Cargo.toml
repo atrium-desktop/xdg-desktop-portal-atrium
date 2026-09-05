@@ -3,17 +3,17 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.29"
+version = "0.0.30"
 edition = "2024"
 license = "MIT"
 rust-version = "1.88"
 repository = "https://github.com/atrium-desktop/xdg-desktop-portal-atrium"
 
 [workspace.dependencies]
-atrium-portal-ipc = { version = "=0.0.29", path = "crates/atrium-portal-ipc" }
-atrium-portal-runtime = { version = "=0.0.29", path = "crates/atrium-portal-runtime" }
-atrium-portal-prompter = { version = "=0.0.29", path = "crates/atrium-portal-prompter" }
-atrium-portal-secret = { version = "=0.0.29", path = "crates/atrium-portal-secret" }
+atrium-portal-ipc = { version = "=0.0.30", path = "crates/atrium-portal-ipc" }
+atrium-portal-runtime = { version = "=0.0.30", path = "crates/atrium-portal-runtime" }
+atrium-portal-prompter = { version = "=0.0.30", path = "crates/atrium-portal-prompter" }
+atrium-portal-secret = { version = "=0.0.30", path = "crates/atrium-portal-secret" }
 
 dirs = "5"
 env_logger = "0.11"
