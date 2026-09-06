@@ -24,3 +24,4 @@
 | [0020](0020-secret-vault-delegation-to-sigil.md) | Secret vault delegation to sigil | Accepted |
 | [0021](0021-headless-portal-and-optics-retirement.md) | Headless portal architecture, prompt delegation to companion components, and optics retirement | Accepted |
 | [0022](0022-stateless-deterministic-secret-pipeline-and-memory-hardening.md) | Stateless deterministic secret pipeline and zero-trace memory hardening | Accepted |
+| [0023](0023-sigil-wire-v2-binary-protocol-and-zero-allocation-hardening.md) | sigil-wire-v2 binary protocol and zero-allocation hardening | Accepted |

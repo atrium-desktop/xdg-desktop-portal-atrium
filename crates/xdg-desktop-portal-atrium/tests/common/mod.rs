@@ -385,84 +385,94 @@ impl Drop for FakeSigil {
     }
 }
 
-#[derive(serde::Deserialize)]
-enum FakeIpcRequest {
-    GetApplicationSecret {
-        namespace: String,
-        subject: String,
-        purpose: String,
-    },
-}
-
-#[derive(serde::Serialize)]
-enum FakeIpcResponse {
-    Secret(Vec<u8>),
-    Locked,
-    Cancelled,
-    Error(String),
-}
-
 fn serve(
     listener: std::os::unix::net::UnixListener,
     observed: std::sync::Arc<std::sync::Mutex<Vec<ObservedSecretRequest>>>,
     response: FakeSigilResponse,
 ) {
+    const WIRE_MAGIC: [u8; 4] = *b"SIGL";
+    const WIRE_VERSION: u8 = 2;
+    const OP_GET_APPLICATION_SECRET: u8 = 0x01;
+    const STATUS_SECRET: u8 = 0x01;
+    const STATUS_LOCKED: u8 = 0x03;
+    const STATUS_CANCELLED: u8 = 0x05;
+    const STATUS_ERROR: u8 = 0x07;
+
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else {
             break;
         };
-        let request = read_frame(&mut stream).and_then(|bytes| {
-            serde_json::from_slice::<FakeIpcRequest>(&bytes).map_err(|e| e.to_string())
-        });
-        let reply = match request {
-            Ok(FakeIpcRequest::GetApplicationSecret {
-                namespace,
-                subject,
-                purpose,
-            }) => {
-                observed
-                    .lock()
-                    .expect("observed lock")
-                    .push(ObservedSecretRequest {
-                        namespace,
-                        subject,
-                        purpose,
-                    });
-                match &response {
-                    FakeSigilResponse::Secret(bytes) => FakeIpcResponse::Secret(bytes.clone()),
-                    FakeSigilResponse::Locked => FakeIpcResponse::Locked,
-                    FakeSigilResponse::Cancelled => FakeIpcResponse::Cancelled,
-                    FakeSigilResponse::Error(message) => FakeIpcResponse::Error(message.clone()),
+        use std::io::{Read, Write};
+        let mut header = [0u8; 8];
+        if stream.read_exact(&mut header).is_err() {
+            continue;
+        }
+        if header[0..4] != WIRE_MAGIC
+            || header[4] != WIRE_VERSION
+            || header[5] != OP_GET_APPLICATION_SECRET
+        {
+            continue;
+        }
+        let payload_len = u16::from_be_bytes([header[6], header[7]]) as usize;
+        let mut payload = vec![0u8; payload_len];
+        if stream.read_exact(&mut payload).is_err() {
+            continue;
+        }
+
+        let mut offset = 0;
+        let Ok((ns, subj, purp)) = (|| -> Result<(String, String, String), String> {
+            fn read_str(p: &[u8], o: &mut usize) -> Result<String, String> {
+                if *o + 2 > p.len() {
+                    return Err("truncated length".into());
                 }
+                let l = u16::from_be_bytes([p[*o], p[*o + 1]]) as usize;
+                *o += 2;
+                if *o + l > p.len() {
+                    return Err("truncated data".into());
+                }
+                let s = String::from_utf8(p[*o..*o + l].to_vec()).map_err(|e| e.to_string())?;
+                *o += l;
+                Ok(s)
             }
-            Err(error) => FakeIpcResponse::Error(format!("unparseable request: {error}")),
-        };
-        let Ok(payload) = serde_json::to_vec(&reply) else {
+            Ok((
+                read_str(&payload, &mut offset)?,
+                read_str(&payload, &mut offset)?,
+                read_str(&payload, &mut offset)?,
+            ))
+        })() else {
             continue;
         };
-        let frame = [
-            (payload.len() as u32).to_be_bytes().as_slice(),
-            payload.as_slice(),
-        ]
-        .concat();
-        use std::io::Write;
-        let _ = stream.write_all(&frame);
-        let _ = stream.flush();
-        // The connection closes here, matching the client's one-request
-        // connect-per-call pattern.
-    }
-}
 
-fn read_frame(stream: &mut std::os::unix::net::UnixStream) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-    let mut len_bytes = [0u8; 4];
-    stream
-        .read_exact(&mut len_bytes)
-        .map_err(|e| format!("read length: {e}"))?;
-    let len = u32::from_be_bytes(len_bytes) as usize;
-    let mut buf = vec![0u8; len];
-    stream
-        .read_exact(&mut buf)
-        .map_err(|e| format!("read payload: {e}"))?;
-    Ok(buf)
+        observed
+            .lock()
+            .expect("observed lock")
+            .push(ObservedSecretRequest {
+                namespace: ns,
+                subject: subj,
+                purpose: purp,
+            });
+
+        let (status, resp_body) = match &response {
+            FakeSigilResponse::Secret(bytes) => (STATUS_SECRET, bytes.clone()),
+            FakeSigilResponse::Locked => (STATUS_LOCKED, Vec::new()),
+            FakeSigilResponse::Cancelled => (STATUS_CANCELLED, Vec::new()),
+            FakeSigilResponse::Error(msg) => {
+                let mut b = Vec::new();
+                let bytes = msg.as_bytes();
+                b.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+                b.extend_from_slice(bytes);
+                (STATUS_ERROR, b)
+            }
+        };
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&WIRE_MAGIC);
+        out.push(WIRE_VERSION);
+        out.push(status);
+        out.extend_from_slice(&(resp_body.len() as u16).to_be_bytes());
+        out.extend_from_slice(&resp_body);
+
+        let _ = stream.write_all(&out);
+        let _ = stream.flush();
+    }
 }
