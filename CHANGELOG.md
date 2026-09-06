@@ -15,6 +15,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.32] - 2026-09-06
+
+### Added
+
+- **sigil-wire-v2 binary protocol and zero-allocation hardening ([ADR-0023](docs/adr/0023-sigil-wire-v2-binary-protocol-and-zero-allocation-hardening.md)).**
+  Upgraded native IPC communication with the `sigil` vault daemon from JSON over
+  a length-prefixed stream to the zero-allocation `sigil-wire-v2` binary framing format,
+  removing transient dynamic heap allocations from the secret retrieval dispatch path.
+
 ## [0.0.31] - 2026-09-05
 
 ### Added
@@ -780,7 +789,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.31...HEAD
+[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.32...HEAD
+[0.0.32]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.31...v0.0.32
 [0.0.31]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.30...v0.0.31
 [0.0.30]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.29...v0.0.30
 [0.0.29]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.28...v0.0.29
