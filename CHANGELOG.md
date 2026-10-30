@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.33] - 2026-10-30
+
 ### Added
 
 - **Protocol-32 projection ([ADR-0024](docs/adr/0024-protocol-32-projection.md)).**
@@ -800,7 +802,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.32...HEAD
+[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.33...HEAD
+[0.0.33]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.32...v0.0.33
 [0.0.32]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.31...v0.0.32
 [0.0.31]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.30...v0.0.31
 [0.0.30]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.29...v0.0.30
