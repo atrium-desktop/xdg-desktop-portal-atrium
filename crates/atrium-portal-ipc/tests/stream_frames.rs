@@ -423,11 +423,13 @@ impl Handler for Outputs {
                 connector: "HDMI-A-1".into(),
                 primary: true,
                 rect: atrium_portal_ipc::Rect::new(0, 0, 1920, 1080),
+                kind: atrium_portal_ipc::OutputKind::External,
             },
             atrium_portal_ipc::OutputInfo {
                 connector: "DP-1".into(),
                 primary: false,
                 rect: atrium_portal_ipc::Rect::new(1920, 0, 2560, 1440),
+                kind: atrium_portal_ipc::OutputKind::External,
             },
         ])
     }

@@ -23,6 +23,8 @@ pub(crate) enum CastSource {
     Monitor { output: Option<String> },
     /// A single toplevel window (protocol 29 only).
     Window { window: atrium_portal_ipc::WindowId },
+    /// A session-scoped virtual extend output (protocol 32, SOURCE_TYPE_VIRTUAL = 4).
+    Virtual { connector: Option<String> },
 }
 
 /// The selection `Start` must apply, reserved out of the registry.

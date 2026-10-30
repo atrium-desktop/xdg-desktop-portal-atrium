@@ -15,8 +15,8 @@ use crate::codec::{read_msg, write_msg};
 use crate::schema::{Request, Response, valid_wallpaper_path};
 use crate::{
     ConfirmPickResult, ConnectionCapabilities, Event, LOCAL_PORTAL_SCOPE, LeaseGrant, OutputInfo,
-    PROTOCOL_VERSION, PickKind, PickResult, Rect, SettingsSnapshot, StreamCursorMode,
-    StreamPixelFormat, StreamTarget,
+    OutputMode, PROTOCOL_VERSION, PickKind, PickResult, Point, Rect, Scale, SettingsSnapshot,
+    StreamCursorMode, StreamPixelFormat, StreamTarget, VirtualOutputSpec,
 };
 
 pub struct CaptureOutputPayload {
@@ -124,6 +124,51 @@ pub trait Handler: Send + Sync + 'static {
 
     /// Protocol-25 slot release from the client.
     fn stream_buffer_release(&self, _stream_id: u64, _slot: u32) {}
+
+    /// Renegotiate a live stream in place (protocol 32, ADR-0186). Default:
+    /// unsupported, so a test that exercises the op must opt in.
+    fn stream_output_renegotiate(
+        &self,
+        _connection: u64,
+        _stream_id: u64,
+        _max_fps: Option<u32>,
+        _dmabuf: Option<bool>,
+    ) -> Result<StreamInfo, String> {
+        Err("stream renegotiation is not implemented by this test server".into())
+    }
+
+    /// Create a session-scoped virtual extend output (protocol 32, ADR-0186).
+    /// Default: unsupported.
+    fn create_virtual_output(
+        &self,
+        _connection: u64,
+        _spec: VirtualOutputSpec,
+    ) -> Result<OutputInfo, String> {
+        Err("virtual outputs are not implemented by this test server".into())
+    }
+
+    /// Resize, rescale, or reposition a live virtual extend output
+    /// (protocol 32, ADR-0186). Default: unsupported.
+    fn resize_virtual_output(
+        &self,
+        _connection: u64,
+        _connector: String,
+        _mode: OutputMode,
+        _scale: Option<Scale>,
+        _logical_origin: Option<Point>,
+    ) -> Result<OutputInfo, String> {
+        Err("virtual outputs are not implemented by this test server".into())
+    }
+
+    /// Destroy a live virtual extend output (protocol 32, ADR-0186). Default:
+    /// unsupported.
+    fn destroy_virtual_output(
+        &self,
+        _connection: u64,
+        _connector: String,
+    ) -> Result<String, String> {
+        Err("virtual outputs are not implemented by this test server".into())
+    }
 
     /// Lease policy: whether a `Hello` lease request is granted. Mirrors the
     /// compositor's policy decision; returning `false` leaves the connection
@@ -619,6 +664,133 @@ fn serve_connection(
                 streams.lock().unwrap().remove(&stream_id);
                 handler.stream_output_stop(stream_id);
                 send(&writer, &Response::StreamOutputStopped { stream_id })
+            }
+            Request::StreamOutputRenegotiate {
+                stream_id,
+                max_fps,
+                dmabuf,
+            } => {
+                // The real dispatch's gate order: control, a live lease, then
+                // the lock/VT gate. Renegotiation does not change scope.
+                if !granted.control {
+                    send_error(
+                        &writer,
+                        "StreamOutputRenegotiate requires the control capability".into(),
+                    )
+                } else if !lease_alive {
+                    send_error(&writer, "privileged capability lease expired".into())
+                } else if !handler.session_active() {
+                    send_error(&writer, "session is locked or inactive".into())
+                } else {
+                    match handler.stream_output_renegotiate(connection, stream_id, max_fps, dmabuf)
+                    {
+                        Ok(info) => {
+                            let (slots, slot_stride, slot_bytes) = match &info.slots {
+                                Some(table) => (
+                                    Some(table.len() as u32),
+                                    Some(table.first().map_or(0, |slot| slot.stride)),
+                                    Some(table.first().map_or(0, |slot| slot.byte_len)),
+                                ),
+                                None => (None, None, None),
+                            };
+                            let mut guard = writer.lock().unwrap();
+                            let result = write_msg(
+                                &mut *guard,
+                                &Response::StreamOutputStarted {
+                                    stream_id: info.stream_id,
+                                    width: info.width,
+                                    height: info.height,
+                                    format: info.format,
+                                    slots,
+                                    slot_stride,
+                                    slot_bytes,
+                                },
+                            )
+                            .and_then(|()| {
+                                if let Some(table) = info.slots {
+                                    for slot in table {
+                                        crate::blob::send_fd(&guard, slot.fd)?;
+                                    }
+                                }
+                                Ok(())
+                            });
+                            drop(guard);
+                            result
+                        }
+                        Err(message) => send_error(&writer, message),
+                    }
+                }
+            }
+            Request::CreateVirtualOutput { spec } => {
+                // Gate order mirrors the compositor: control, live lease, an
+                // explicit ManageVirtualOutput scope op (the portal scope
+                // holds it), then the lock/VT gate.
+                if !granted.control {
+                    send_error(
+                        &writer,
+                        "CreateVirtualOutput requires the control capability".into(),
+                    )
+                } else if !lease_alive {
+                    send_error(&writer, "privileged capability lease expired".into())
+                } else if scope.as_deref() != Some(LOCAL_PORTAL_SCOPE) {
+                    send_error(&writer, "out of scope".into())
+                } else if !handler.session_active() {
+                    send_error(&writer, "session is locked or inactive".into())
+                } else {
+                    match handler.create_virtual_output(connection, spec) {
+                        Ok(output) => send(&writer, &Response::VirtualOutputCreated { output }),
+                        Err(message) => send_error(&writer, message),
+                    }
+                }
+            }
+            Request::ResizeVirtualOutput {
+                connector,
+                mode,
+                scale,
+                logical_origin,
+            } => {
+                if !granted.control {
+                    send_error(
+                        &writer,
+                        "ResizeVirtualOutput requires the control capability".into(),
+                    )
+                } else if !lease_alive {
+                    send_error(&writer, "privileged capability lease expired".into())
+                } else if scope.as_deref() != Some(LOCAL_PORTAL_SCOPE) {
+                    send_error(&writer, "out of scope".into())
+                } else if !handler.session_active() {
+                    send_error(&writer, "session is locked or inactive".into())
+                } else {
+                    match handler.resize_virtual_output(
+                        connection,
+                        connector,
+                        mode,
+                        scale,
+                        logical_origin,
+                    ) {
+                        Ok(output) => send(&writer, &Response::VirtualOutputResized { output }),
+                        Err(message) => send_error(&writer, message),
+                    }
+                }
+            }
+            Request::DestroyVirtualOutput { connector } => {
+                if !granted.control {
+                    send_error(
+                        &writer,
+                        "DestroyVirtualOutput requires the control capability".into(),
+                    )
+                } else if !lease_alive {
+                    send_error(&writer, "privileged capability lease expired".into())
+                } else if scope.as_deref() != Some(LOCAL_PORTAL_SCOPE) {
+                    send_error(&writer, "out of scope".into())
+                } else {
+                    match handler.destroy_virtual_output(connection, connector) {
+                        Ok(connector) => {
+                            send(&writer, &Response::VirtualOutputDestroyed { connector })
+                        }
+                        Err(message) => send_error(&writer, message),
+                    }
+                }
             }
             Request::SetWallpaper { path } => {
                 // The real dispatch's gate order: control, a live lease, an

@@ -1,4 +1,4 @@
-//! Portal-owned projection of Tessera IPC protocol version 29.
+//! Portal-owned projection of Tessera IPC protocol version 32.
 //!
 //! Only compositor-owned portal resources belong here. The wire types are
 //! implemented independently from the compositor's Rust model so an internal
@@ -11,12 +11,14 @@ use serde::{Deserialize, Serialize};
 /// Newest protocol version this projection speaks. The handshake asks for
 /// this version and accepts a downgrade to [`MIN_PROTOCOL_VERSION`] when the
 /// compositor is older (version-gated features, such as dmabuf slot
-/// streaming at 25 and the protocol-29 additions — output enumeration,
+/// streaming at 25, the protocol-29 additions — output enumeration,
 /// per-output stream targets, the stream cursor mode, and the
-/// `StreamGeometryChanged` event — key off the negotiated version).
-/// Protocol 26 (`CaptureWindow`), 27 (`LaunchApp`, `Focus.reveal`), and 28
-/// are deliberately not projected: no Portal interface needs them.
-pub const PROTOCOL_VERSION: u32 = 29;
+/// `StreamGeometryChanged` event — and the protocol-32 additions —
+/// session-scoped virtual extend outputs, in-place stream renegotiation, and
+/// `OutputInfo::kind` — key off the negotiated version).
+/// Protocol 26 (`CaptureWindow`), 27 (`LaunchApp`, `Focus.reveal`), 28, 30,
+/// and 31 are deliberately not projected: no Portal interface needs them.
+pub const PROTOCOL_VERSION: u32 = 32;
 /// Oldest protocol version this projection can negotiate down to.
 pub const MIN_PROTOCOL_VERSION: u32 = 24;
 pub const LOCAL_PORTAL_SCOPE: &str = "atrium-portal";
@@ -166,12 +168,81 @@ pub struct SettingsSnapshot {
     pub preferences: DesktopPreferences,
 }
 
-/// One compositor output as `EnumerateOutputs` reports it (protocol 29).
+/// Placement and backing class of a compositor output (protocol 32,
+/// ADR-0186). `external` is the wire default and is omitted, so a pre-32 peer
+/// shape is unchanged; `virtual` is a session-scoped headless extend output a
+/// caster streams (`VIRTUAL-*`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputKind {
+    Internal,
+    #[default]
+    External,
+    Virtual,
+}
+
+impl OutputKind {
+    /// Serde skip helper: `external` is the default and stays off the wire.
+    pub(crate) fn is_external(&self) -> bool {
+        matches!(self, Self::External)
+    }
+
+    /// Whether this output is a headless virtual extend output.
+    #[must_use]
+    pub fn is_virtual(self) -> bool {
+        matches!(self, Self::Virtual)
+    }
+}
+
+/// A physical display mode (protocol 32): the resolution and refresh a virtual
+/// extend output runs at, or that a resize request asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputMode {
+    pub width: i32,
+    pub height: i32,
+    pub refresh_mhz: u32,
+}
+
+/// A logical-to-physical scale factor (protocol 32). A newtype, so it crosses
+/// the wire as a bare number.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Scale(pub f32);
+
+impl Default for Scale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+/// Specification for creating a session-scoped virtual extend output
+/// (protocol 32, ADR-0186). `connector` is omitted to let the compositor
+/// allocate the lowest unused `VIRTUAL-n`; `persistent` is omitted for the
+/// session-scoped default a Portal session uses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VirtualOutputSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connector: Option<String>,
+    pub mode: OutputMode,
+    #[serde(default)]
+    pub scale: Scale,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_origin: Option<Point>,
+    #[serde(default)]
+    pub persistent: bool,
+}
+
+/// One compositor output as `EnumerateOutputs` reports it (protocol 29;
+/// `kind` is protocol 32).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputInfo {
     pub connector: String,
     pub primary: bool,
     pub rect: Rect,
+    /// Placement and backing class (protocol 32). Omitted when `external`, so
+    /// a projection negotiating below 32 sees the shape it always has.
+    #[serde(default, skip_serializing_if = "OutputKind::is_external")]
+    pub kind: OutputKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,6 +444,42 @@ pub(crate) enum Request {
     StreamOutputStop {
         stream_id: u64,
     },
+    /// Renegotiate a frozen or live stream in place after a target geometry
+    /// change (protocol 32, ADR-0186). Rebuilds the backing dmabuf slot ring
+    /// (when `dmabuf` is `Some(true)`) or SHM readback at the target's current
+    /// dimensions while preserving `stream_id`, `sequence`, and `dropped`, and
+    /// replies with [`Response::StreamOutputStarted`].
+    StreamOutputRenegotiate {
+        stream_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_fps: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dmabuf: Option<bool>,
+    },
+    /// Create a session-scoped virtual extend output (protocol 32, ADR-0186).
+    /// A Portal session uses it to implement `ScreenCast` with a
+    /// `SourceType::VIRTUAL` source. Omitted `spec.persistent` binds the output
+    /// to this connection, so it is reclaimed if the session dies.
+    CreateVirtualOutput {
+        spec: VirtualOutputSpec,
+    },
+    /// Resize, rescale, or reposition a live virtual extend output
+    /// (protocol 32, ADR-0186). A live stream targeting the connector freezes
+    /// with [`Event::StreamGeometryChanged`] and renegotiates in place.
+    ResizeVirtualOutput {
+        connector: String,
+        mode: OutputMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<Scale>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logical_origin: Option<Point>,
+    },
+    /// Destroy a live virtual extend output (protocol 32, ADR-0186), ending
+    /// any stream targeting it and relocating its windows to the primary
+    /// physical output.
+    DestroyVirtualOutput {
+        connector: String,
+    },
     PickTarget {
         kind: PickKind,
     },
@@ -438,6 +545,18 @@ pub(crate) enum Response {
     },
     StreamOutputStopped {
         stream_id: u64,
+    },
+    /// Reply to [`Request::CreateVirtualOutput`] (protocol 32, ADR-0186).
+    VirtualOutputCreated {
+        output: OutputInfo,
+    },
+    /// Reply to [`Request::ResizeVirtualOutput`] (protocol 32, ADR-0186).
+    VirtualOutputResized {
+        output: OutputInfo,
+    },
+    /// Reply to [`Request::DestroyVirtualOutput`] (protocol 32, ADR-0186).
+    VirtualOutputDestroyed {
+        connector: String,
     },
     Picked {
         result: PickResult,
@@ -520,8 +639,8 @@ mod tests {
     }
 
     #[test]
-    fn hello_matches_the_v29_wire_shape() {
-        // The literal 29 pins this fixture to the v29 shape; PROTOCOL_VERSION
+    fn hello_matches_the_v32_wire_shape() {
+        // The literal 32 pins this fixture to the v32 shape; PROTOCOL_VERSION
         // must equal it.
         let request = Request::Hello {
             version: PROTOCOL_VERSION,
@@ -533,7 +652,7 @@ mod tests {
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
                 "type": "Hello",
-                "version": 29,
+                "version": 32,
                 "caps": {
                     "query": true,
                     "control": false,
@@ -542,6 +661,189 @@ mod tests {
                     "interaction_domain": false
                 },
                 "scope": null
+            })
+        );
+    }
+
+    #[test]
+    fn virtual_output_operations_match_the_real_wire_fixtures() {
+        // The literals below were produced by serializing the compositor's own
+        // schema types (tessera-protocol `Request`/`Response`) with serde_json.
+        // An auto-allocated create omits `connector` and `logical_origin`.
+        assert_eq!(
+            serde_json::to_value(Request::CreateVirtualOutput {
+                spec: VirtualOutputSpec {
+                    connector: None,
+                    mode: OutputMode {
+                        width: 1920,
+                        height: 1080,
+                        refresh_mhz: 60_000,
+                    },
+                    scale: Scale::default(),
+                    logical_origin: None,
+                    persistent: false,
+                },
+            })
+            .unwrap(),
+            serde_json::json!({
+                "type": "CreateVirtualOutput",
+                "spec": {
+                    "mode": { "width": 1920, "height": 1080, "refresh_mhz": 60000 },
+                    "scale": 1.0,
+                    "persistent": false
+                }
+            })
+        );
+        // A named, scaled, positioned create carries every field.
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "type": "CreateVirtualOutput",
+            "spec": {
+                "connector": "VIRTUAL-1",
+                "mode": { "width": 2560, "height": 1440, "refresh_mhz": 60000 },
+                "scale": 2.0,
+                "logical_origin": { "x": 1280, "y": 0 },
+                "persistent": true
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            request,
+            Request::CreateVirtualOutput {
+                spec: VirtualOutputSpec {
+                    connector: Some("VIRTUAL-1".into()),
+                    mode: OutputMode {
+                        width: 2560,
+                        height: 1440,
+                        refresh_mhz: 60_000,
+                    },
+                    scale: Scale(2.0),
+                    logical_origin: Some(Point { x: 1280, y: 0 }),
+                    persistent: true,
+                },
+            }
+        );
+
+        // Resize omits `scale` and `logical_origin` when absent.
+        assert_eq!(
+            serde_json::to_value(Request::ResizeVirtualOutput {
+                connector: "VIRTUAL-1".into(),
+                mode: OutputMode {
+                    width: 1280,
+                    height: 720,
+                    refresh_mhz: 59_940,
+                },
+                scale: None,
+                logical_origin: None,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "type": "ResizeVirtualOutput",
+                "connector": "VIRTUAL-1",
+                "mode": { "width": 1280, "height": 720, "refresh_mhz": 59940 }
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(Request::DestroyVirtualOutput {
+                connector: "VIRTUAL-1".into(),
+            })
+            .unwrap(),
+            serde_json::json!({ "type": "DestroyVirtualOutput", "connector": "VIRTUAL-1" })
+        );
+
+        // Renegotiate omits the optional re-negotiation hints when absent.
+        assert_eq!(
+            serde_json::to_value(Request::StreamOutputRenegotiate {
+                stream_id: 7,
+                max_fps: None,
+                dmabuf: None,
+            })
+            .unwrap(),
+            serde_json::json!({ "type": "StreamOutputRenegotiate", "stream_id": 7 })
+        );
+
+        // A created reply carries the compositor's full output projection, and
+        // an external output omits `kind`.
+        let created: Response = serde_json::from_value(serde_json::json!({
+            "type": "VirtualOutputCreated",
+            "output": {
+                "connector": "eDP-1",
+                "primary": true,
+                "rect": { "origin": { "x": 0, "y": 0 }, "size": { "w": 0, "h": 0 } },
+                "geometry": {
+                    "mode": { "width": 0, "height": 0, "refresh_mhz": 0 },
+                    "scale": 1.0,
+                    "transform": "Normal",
+                    "logical_origin": { "x": 0, "y": 0 }
+                },
+                "available_modes": []
+            }
+        }))
+        .unwrap();
+        let Response::VirtualOutputCreated { output } = created else {
+            panic!("VirtualOutputCreated");
+        };
+        assert_eq!(output.connector, "eDP-1");
+        assert_eq!(output.kind, OutputKind::External);
+
+        // An `Outputs` list marks a virtual extend output and leaves an
+        // external one unmarked.
+        let outputs: Response = serde_json::from_value(serde_json::json!({
+            "type": "Outputs",
+            "outputs": [{
+                "connector": "VIRTUAL-1",
+                "primary": false,
+                "rect": { "origin": { "x": 0, "y": 0 }, "size": { "w": 0, "h": 0 } },
+                "kind": "virtual"
+            }]
+        }))
+        .unwrap();
+        let Response::Outputs { outputs } = outputs else {
+            panic!("Outputs");
+        };
+        assert_eq!(outputs[0].kind, OutputKind::Virtual);
+        assert!(outputs[0].kind.is_virtual());
+
+        assert_eq!(
+            serde_json::to_value(Response::VirtualOutputDestroyed {
+                connector: "VIRTUAL-1".into(),
+            })
+            .unwrap(),
+            serde_json::json!({ "type": "VirtualOutputDestroyed", "connector": "VIRTUAL-1" })
+        );
+    }
+
+    #[test]
+    fn external_output_omits_kind_on_the_wire() {
+        // A projection negotiating below 32 must see the shape it always has:
+        // `kind` is absent for an external output and present for a virtual one.
+        assert_eq!(
+            serde_json::to_value(OutputInfo {
+                connector: "eDP-1".into(),
+                primary: true,
+                rect: Rect::new(0, 0, 1920, 1080),
+                kind: OutputKind::External,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "connector": "eDP-1",
+                "primary": true,
+                "rect": { "origin": { "x": 0, "y": 0 }, "size": { "w": 1920, "h": 1080 } }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(OutputInfo {
+                connector: "VIRTUAL-1".into(),
+                primary: false,
+                rect: Rect::new(1920, 0, 1920, 1080),
+                kind: OutputKind::Virtual,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "connector": "VIRTUAL-1",
+                "primary": false,
+                "rect": { "origin": { "x": 1920, "y": 0 }, "size": { "w": 1920, "h": 1080 } },
+                "kind": "virtual"
             })
         );
     }
@@ -708,11 +1010,13 @@ mod tests {
                     connector: "HDMI-A-1".into(),
                     primary: true,
                     rect: Rect::new(0, 0, 1920, 1080),
+                    kind: OutputKind::External,
                 },
                 OutputInfo {
                     connector: "DP-1".into(),
                     primary: false,
                     rect: Rect::new(1920, 0, 2560, 1440),
+                    kind: OutputKind::External,
                 },
             ],
         };

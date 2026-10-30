@@ -51,9 +51,11 @@ const SESSION_IFACE: &str = "org.freedesktop.impl.portal.Session";
 /// Version 6 adds the stable `pipewire-serial` stream property.
 pub(crate) const SCREENCAST_VERSION: u32 = 6;
 /// `AvailableSourceTypes` bit: monitor.
-const SOURCE_TYPE_MONITOR: u32 = 1;
+pub(crate) const SOURCE_TYPE_MONITOR: u32 = 1;
 /// `AvailableSourceTypes` bit: window (protocol 29).
-const SOURCE_TYPE_WINDOW: u32 = 2;
+pub(crate) const SOURCE_TYPE_WINDOW: u32 = 2;
+/// `AvailableSourceTypes` bit: virtual extend output (protocol 32, ADR-0024).
+pub(crate) const SOURCE_TYPE_VIRTUAL: u32 = 4;
 /// `AvailableCursorModes` bit: Hidden.
 const CURSOR_MODE_HIDDEN: u32 = 1;
 /// `AvailableCursorModes` bit: Embedded (protocol 29).
@@ -61,6 +63,8 @@ const CURSOR_MODE_EMBEDDED: u32 = 2;
 /// The compositor protocol that adds output enumeration, per-output
 /// stream targets, window streams, and cursor modes.
 const PER_SOURCE_PROTOCOL: u32 = 29;
+/// The compositor protocol that adds session-scoped virtual extend outputs (ADR-0024).
+const VIRTUAL_SOURCE_PROTOCOL: u32 = 32;
 /// Waiting for the PipeWire negotiation longer than this is a failure.
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 /// One job handed from the bus methods to the screencast worker.
@@ -137,7 +141,7 @@ pub(crate) fn parse_select_options(options: &HashMap<String, Value<'_>>) -> Sele
 /// cursor mode) lives in [`validate_select`] and runs on the worker, where
 /// the live negotiated protocol is known — see `ipc::cached_protocol_version`.
 fn validate_select_shape(options: &SelectOptions) -> Result<(), String> {
-    if options.source_types & !(SOURCE_TYPE_MONITOR | SOURCE_TYPE_WINDOW) != 0 {
+    if options.source_types & !(SOURCE_TYPE_MONITOR | SOURCE_TYPE_WINDOW | SOURCE_TYPE_VIRTUAL) != 0 {
         return Err(format!(
             "source types {:#b} name undefined bits",
             options.source_types
@@ -157,13 +161,17 @@ fn validate_select(options: &SelectOptions, protocol: u32) -> Result<(), String>
     // The mask must intersect what the compositor can serve. A window bit
     // alongside monitor is accepted everywhere and served as monitor on
     // pre-29 compositors; only a mask with no servable subset fails.
-    let available = if protocol >= PER_SOURCE_PROTOCOL {
-        SOURCE_TYPE_MONITOR | SOURCE_TYPE_WINDOW
-    } else {
-        SOURCE_TYPE_MONITOR
-    };
+    let mut available = SOURCE_TYPE_MONITOR;
+    if protocol >= PER_SOURCE_PROTOCOL {
+        available |= SOURCE_TYPE_WINDOW;
+    }
+    if protocol >= VIRTUAL_SOURCE_PROTOCOL {
+        available |= SOURCE_TYPE_VIRTUAL;
+    }
     if options.source_types & available == 0 {
-        return Err(if protocol >= PER_SOURCE_PROTOCOL {
+        return Err(if protocol >= VIRTUAL_SOURCE_PROTOCOL {
+            "only monitor, window, and virtual sources are supported".to_string()
+        } else if protocol >= PER_SOURCE_PROTOCOL {
             "only monitor and window sources are supported".to_string()
         } else {
             "only monitor sources are supported".to_string()
@@ -347,11 +355,14 @@ impl ScreenCastIface {
 
     #[zbus(property, name = "AvailableSourceTypes")]
     fn available_source_types(&self) -> u32 {
+        let mut types = SOURCE_TYPE_MONITOR;
         if self.compositor_version() >= PER_SOURCE_PROTOCOL {
-            SOURCE_TYPE_MONITOR | SOURCE_TYPE_WINDOW
-        } else {
-            SOURCE_TYPE_MONITOR
+            types |= SOURCE_TYPE_WINDOW;
         }
+        if self.compositor_version() >= VIRTUAL_SOURCE_PROTOCOL {
+            types |= SOURCE_TYPE_VIRTUAL;
+        }
+        types
     }
 
     #[zbus(property, name = "AvailableCursorModes")]
@@ -617,9 +628,18 @@ fn select_sources(
                 description: None,
             });
         }
+        if options.source_types & SOURCE_TYPE_VIRTUAL != 0 {
+            choices.push(atrium_portal_prompter::SourceChoice {
+                id: "virtual".to_string(),
+                label: "Virtual Extended Display".to_string(),
+                description: Some("New virtual display for wireless casting".to_string()),
+            });
+        }
     }
 
-    let (selected, remember) = if choices.len() == 1 {
+    let (selected, remember) = if options.source_types == SOURCE_TYPE_VIRTUAL {
+        ("virtual".to_string(), false)
+    } else if choices.len() == 1 {
         ("desktop".to_string(), false)
     } else {
         match choose_source(
@@ -639,6 +659,7 @@ fn select_sources(
     }
 
     let source = match selected.as_str() {
+        "virtual" => CastSource::Virtual { connector: None },
         "desktop" => CastSource::Monitor { output: None },
         "window" if window_offered => match pick_window(picker) {
             Ok(window) => CastSource::Window { window },
@@ -655,6 +676,9 @@ fn select_sources(
 
     // Explicit compositor consent naming the concrete target.
     let body = match &source {
+        CastSource::Virtual { .. } => {
+            format!("Allow {app_id} to create and stream a wireless virtual display?")
+        }
         CastSource::Monitor { output: None } => {
             format!("Allow {app_id} to record the entire desktop?")
         }
@@ -699,7 +723,7 @@ fn select_sources(
                     .issue(options.persist_mode, sender.unwrap_or(""), stored)
                     .map(|token| (options.persist_mode, token))
             }
-            CastSource::Window { .. } => None,
+            CastSource::Window { .. } | CastSource::Virtual { .. } => None,
         }
     } else {
         None
@@ -928,6 +952,7 @@ fn start_cast(
             let source_type = match &selection.source {
                 CastSource::Monitor { .. } => SOURCE_TYPE_MONITOR,
                 CastSource::Window { .. } => SOURCE_TYPE_WINDOW,
+                CastSource::Virtual { .. } => SOURCE_TYPE_VIRTUAL,
             };
             let mut results = HashMap::from([(
                 "streams".to_string(),
@@ -1170,5 +1195,12 @@ mod tests {
             matches!(key, Value::Str(key) if key.as_str() == "pipewire-serial")
                 && matches!(value, Value::Value(value) if **value == Value::U64(9001))
         }));
+    }
+
+    #[test]
+    fn virtual_source_type_is_accepted_on_protocol_32() {
+        let parsed = parse_select_options(&options(&[("types", Value::from(SOURCE_TYPE_VIRTUAL))]));
+        assert!(validate_select(&parsed, 32).is_ok());
+        assert!(validate_select(&parsed, 29).is_err());
     }
 }

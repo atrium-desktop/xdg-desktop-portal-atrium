@@ -4,7 +4,7 @@
 [xdg-desktop-portal](https://flatpak.github.io/xdg-desktop-portal/)
 backend for the Tessera desktop. It translates freedesktop portal D-Bus
 requests into Portal-owned services and, only for compositor resources, a
-narrow projection of Tessera IPC (protocol 29, negotiating down to 24). It
+narrow projection of Tessera IPC (protocol 32, negotiating down to 24). It
 publishes ScreenCast streams
 through PipeWire and routes the per-application Secret portal to the
 sigil secret service.
@@ -26,10 +26,11 @@ The repository builds a D-Bus-activated headless daemon from a small Cargo works
 ## Compatibility
 
 Portal and Tessera releases have independent version sequences. The current
-workspace speaks Tessera IPC protocol 29 and negotiates down to 24. The
+workspace speaks Tessera IPC protocol 32 and negotiates down to 24. The
 protocol-24 wire schema is verified against Tessera `v0.0.11` and `v0.0.12`;
-Tessera `v0.0.15` provides protocol 25, and `v0.0.16`–`v0.0.21` speak
-protocol 29, which the handshake negotiates down. Wallpaper uses the
+Tessera `v0.0.15` provides protocol 25, `v0.0.16`–`v0.0.21` speak protocol 29,
+and a protocol-32 compositor negotiates down to whatever surface it supports.
+Wallpaper uses the
 compositor's long-standing `SetWallpaper` op, available in every
 supported release. This is a runtime compatibility contract, not a source
 dependency; see the

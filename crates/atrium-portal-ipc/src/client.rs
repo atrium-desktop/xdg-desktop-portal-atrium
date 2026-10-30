@@ -12,8 +12,8 @@ use crate::codec::{read_msg, write_msg};
 use crate::schema::{LeaseRequest, Request, Response, valid_wallpaper_path};
 use crate::{
     ConfirmPickResult, ConnectionCapabilities, Event, LeaseGrant, MIN_PROTOCOL_VERSION, OutputInfo,
-    PROTOCOL_VERSION, PickKind, PickResult, Rect, SettingsSnapshot, StreamCursorMode,
-    StreamPixelFormat, StreamTarget,
+    OutputMode, PROTOCOL_VERSION, PickKind, PickResult, Point, Rect, Scale, SettingsSnapshot,
+    StreamCursorMode, StreamPixelFormat, StreamTarget, VirtualOutputSpec,
 };
 
 #[derive(Debug)]
@@ -478,6 +478,96 @@ impl Client {
 
     pub fn request_lease_renewal(&mut self, ttl_ms: u64) -> io::Result<()> {
         write_msg(&mut self.stream, &Request::RenewLease { ttl_ms })
+    }
+
+    /// Create a session-scoped virtual extend output (protocol 32, ADR-0186).
+    /// The Portal's `ScreenCast` `SourceType::VIRTUAL` path uses this
+    /// ([ADR-0024](../docs/adr/0024-protocol-32-projection.md)). Older
+    /// compositors refuse the op, which surfaces as `Error`.
+    pub fn create_virtual_output(&mut self, spec: VirtualOutputSpec) -> io::Result<OutputInfo> {
+        write_msg(&mut self.stream, &Request::CreateVirtualOutput { spec })?;
+        match read_msg::<_, Response>(&mut self.stream)? {
+            Response::VirtualOutputCreated { output } => Ok(output),
+            Response::Error { message } => Err(io::Error::other(message)),
+            other => Err(unexpected("VirtualOutputCreated", &other)),
+        }
+    }
+
+    /// Resize, rescale, or reposition a live virtual extend output
+    /// (protocol 32, ADR-0186).
+    pub fn resize_virtual_output(
+        &mut self,
+        connector: &str,
+        mode: OutputMode,
+        scale: Option<Scale>,
+        logical_origin: Option<Point>,
+    ) -> io::Result<OutputInfo> {
+        write_msg(
+            &mut self.stream,
+            &Request::ResizeVirtualOutput {
+                connector: connector.to_owned(),
+                mode,
+                scale,
+                logical_origin,
+            },
+        )?;
+        match read_msg::<_, Response>(&mut self.stream)? {
+            Response::VirtualOutputResized { output } => Ok(output),
+            Response::Error { message } => Err(io::Error::other(message)),
+            other => Err(unexpected("VirtualOutputResized", &other)),
+        }
+    }
+
+    /// Destroy a live virtual extend output (protocol 32, ADR-0186),
+    /// reclaiming it on session teardown.
+    pub fn destroy_virtual_output(&mut self, connector: &str) -> io::Result<String> {
+        write_msg(
+            &mut self.stream,
+            &Request::DestroyVirtualOutput {
+                connector: connector.to_owned(),
+            },
+        )?;
+        match read_msg::<_, Response>(&mut self.stream)? {
+            Response::VirtualOutputDestroyed { connector } => Ok(connector),
+            Response::Error { message } => Err(io::Error::other(message)),
+            other => Err(unexpected("VirtualOutputDestroyed", &other)),
+        }
+    }
+
+    /// Renegotiate a frozen stream in place at its target's current geometry
+    /// (protocol 32, ADR-0186), preserving `stream_id`, `sequence`, and
+    /// `dropped`.
+    pub fn renegotiate_output_stream(
+        &mut self,
+        stream_id: u64,
+        max_fps: Option<u32>,
+        dmabuf: Option<bool>,
+    ) -> io::Result<StreamStarted> {
+        write_msg(
+            &mut self.stream,
+            &Request::StreamOutputRenegotiate {
+                stream_id,
+                max_fps,
+                dmabuf,
+            },
+        )?;
+        match read_msg::<_, Response>(&mut self.stream)? {
+            Response::StreamOutputStarted {
+                stream_id,
+                width,
+                height,
+                format,
+                ..
+            } => Ok(StreamStarted {
+                stream_id,
+                width,
+                height,
+                format,
+                slots: None,
+            }),
+            Response::Error { message } => Err(io::Error::other(message)),
+            other => Err(unexpected("StreamOutputStarted", &other)),
+        }
     }
 
     pub fn next_stream_message(&mut self) -> io::Result<StreamMessage> {

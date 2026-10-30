@@ -272,12 +272,39 @@ fn run_cast(
     // Inward half first: without frames there is nothing to publish.
     let mut client = ipc::connect_compositor(socket, IPC_TIMEOUT)
         .map_err(|e| format!("compositor IPC connect: {e}"))?;
-    let target = match source {
-        CastSource::Monitor { output } => atrium_portal_ipc::StreamTarget::Output {
-            output: output.clone(),
-        },
-        CastSource::Window { window } => {
-            atrium_portal_ipc::StreamTarget::Window { window: *window }
+    let (target, virtual_connector) = match source {
+        CastSource::Monitor { output } => (
+            atrium_portal_ipc::StreamTarget::Output {
+                output: output.clone(),
+            },
+            None,
+        ),
+        CastSource::Window { window } => (
+            atrium_portal_ipc::StreamTarget::Window { window: *window },
+            None,
+        ),
+        CastSource::Virtual { connector } => {
+            let spec = atrium_portal_ipc::VirtualOutputSpec {
+                connector: connector.clone(),
+                mode: atrium_portal_ipc::OutputMode {
+                    width: 1920,
+                    height: 1080,
+                    refresh_mhz: 60_000,
+                },
+                scale: atrium_portal_ipc::Scale(1.0),
+                logical_origin: None,
+                persistent: false,
+            };
+            let created = client
+                .create_virtual_output(spec)
+                .map_err(|e| format!("create virtual output: {e}"))?;
+            let conn = created.connector;
+            (
+                atrium_portal_ipc::StreamTarget::Output {
+                    output: Some(conn.clone()),
+                },
+                Some(conn),
+            )
         }
     };
     let stream_info = client
@@ -856,6 +883,11 @@ fn run_cast(
         {
             log::debug!("portal: teardown slot release failed: {error}");
         }
+    }
+    if let Some(conn) = virtual_connector
+        && let Err(error) = teardown_client.borrow_mut().destroy_virtual_output(&conn)
+    {
+        log::debug!("portal: teardown virtual output destroy failed: {error}");
     }
     drop(transport_state);
     if exit_start_state.borrow().completed && !stopped_by_owner.get() {

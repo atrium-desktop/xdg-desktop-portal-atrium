@@ -8,6 +8,7 @@ dependency.
 
 | Portal line | Tessera runtime | IPC protocol | Tessera build dependency |
 |-------------|---------------|--------------|------------------------|
+| `v0.0.33` | `v0.0.78+` (32); `v0.0.16`–`v0.0.21` (29); `v0.0.15` (25); `v0.0.11`–`v0.0.14` (24) | 32, negotiates down to 24 | None |
 | `v0.0.11`–`v0.0.18` | `v0.0.16`–`v0.0.21` (29); `v0.0.15` (25); `v0.0.11`–`v0.0.14` (24) | 29, negotiates down to 24 | None |
 | `v0.0.10` | `v0.0.16`–`v0.0.21` (27); `v0.0.15` (25); `v0.0.11`–`v0.0.14` (24) | 25, negotiates down to 24 | None |
 | `v0.0.9` | `v0.0.16`–`v0.0.18` (27); `v0.0.15` (25); `v0.0.11`–`v0.0.12` (24) | 25, negotiates down to 24 | None |
@@ -33,12 +34,15 @@ downgrade to 24, so it keeps working with protocol-24 compositors using the
 SHM transports while protocol-25 compositors additionally provide the
 zero-copy dmabuf slot stream (see
 [ADR-0005](../adr/0005-screencast-dmabuf-slot-protocol.md)). The current
-workspace offers protocol 29 and negotiates down to 24; upstream protocols
-26 (`CaptureWindow`), 27 (`LaunchApp`, `Focus.reveal`), and 28 are
+workspace offers protocol 32 and negotiates down to 24; upstream protocols
+26 (`CaptureWindow`), 27 (`LaunchApp`, `Focus.reveal`), 28, 30, and 31 are
 deliberately not projected. The protocol-29 additions (output enumeration,
 connector-addressed stream targets, stream cursor mode,
 `StreamGeometryChanged`, output picking) activate only where negotiated
-(see [ADR-0015](../adr/0015-protocol-29-projection.md)). Wallpaper uses the
+(see [ADR-0015](../adr/0015-protocol-29-projection.md)); the protocol-32
+additions (session-scoped virtual extend outputs, in-place stream
+renegotiation, and `OutputInfo::kind`) activate only there too
+(see [ADR-0024](../adr/0024-protocol-32-projection.md)). Wallpaper uses the
 compositor's path-based `SetWallpaper`
 op, which the compositor has spoken since protocol 17 — before this
 projection's floor — so it works against every listed Tessera release (see

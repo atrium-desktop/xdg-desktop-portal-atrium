@@ -15,6 +15,17 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Protocol-32 projection ([ADR-0024](docs/adr/0024-protocol-32-projection.md)).**
+  The `atrium-portal-ipc` projection is re-baselined to Tessera IPC protocol 32
+  (negotiating down to 24) and gains session-scoped virtual extend outputs:
+  `CreateVirtualOutput` / `ResizeVirtualOutput` / `DestroyVirtualOutput`, the
+  in-place `StreamOutputRenegotiate`, and `OutputInfo::kind`
+  (`internal`/`external`/`virtual`, omitted for external). Literal fixtures were
+  produced from the compositor's own schema types, and the independent test
+  server answers all four operations behind the real dispatch's gate order.
+
 ## [0.0.32] - 2026-09-06
 
 ### Added
