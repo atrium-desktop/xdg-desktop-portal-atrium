@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.34] - 2026-10-31
+
 ### Changed
 
 - **Every interactive prompt now reaches the component that owns it ([ADR-0026](docs/adr/0026-prompter-process-retirement.md)).**
@@ -863,7 +865,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.33...HEAD
+[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.34...HEAD
+[0.0.34]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.33...v0.0.34
 [0.0.33]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.32...v0.0.33
 [0.0.32]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.31...v0.0.32
 [0.0.31]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.30...v0.0.31
