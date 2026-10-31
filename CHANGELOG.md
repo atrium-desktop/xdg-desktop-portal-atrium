@@ -33,6 +33,10 @@ All notable changes to this project are documented in this file.
 - **Autostart entry creation derives its directory without `expect`.** The path
   builder and the directory now come from the same expression, so the invariant
   is structural rather than asserted in a request path.
+- **The FileChooser response arm no longer carries a panic path.** It matched
+  `Selected` and then re-destructured the response with `unreachable!()`; the
+  arm now destructures once. With this, no request path in the workspace
+  contains `unwrap()`, `panic!()`, or `unreachable!()`.
 
 ## [0.0.35] - 2026-10-31
 

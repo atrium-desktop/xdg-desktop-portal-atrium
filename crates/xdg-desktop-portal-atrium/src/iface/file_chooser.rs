@@ -236,23 +236,27 @@ fn run_pick(
 
     let app_id = request.app_id.clone();
     match invoke_chooser(tracker, request_path, &request) {
-        Ok(response @ FileChooserResponse::Selected { .. }) => {
+        Ok(FileChooserResponse::Selected {
+            paths,
+            current_filter,
+            choices,
+        }) => {
             // Request.Close wins a race with a completed child response.
             if sync::lock(tracker, "file chooser tracker").was_closed(request_path) {
                 return cancelled();
             }
-            if let Err(error) = response.validate_for(&request) {
+            // Validate through the borrowed form; `validate_for` needs the
+            // whole response, and reconstructing it keeps this arm free of a
+            // second discriminant that could disagree with the match above.
+            let decoded = FileChooserResponse::Selected {
+                paths: paths.clone(),
+                current_filter: current_filter.clone(),
+                choices: choices.clone(),
+            };
+            if let Err(error) = decoded.validate_for(&request) {
                 log::warn!("portal: invalid FileChooser response for '{app_id}': {error}");
                 return failed();
             }
-            let FileChooserResponse::Selected {
-                paths,
-                current_filter,
-                choices,
-            } = response
-            else {
-                unreachable!()
-            };
             let (count, results) = build_results(paths, current_filter, choices);
             log::info!("portal: FileChooser for '{app_id}' -> {count} uri(s)");
             (0, results)
