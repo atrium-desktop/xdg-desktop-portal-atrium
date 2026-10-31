@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.36] - 2026-10-31
+
 ### Fixed
 
 - **A panicking interface worker no longer disables its interface
@@ -908,7 +910,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.35...HEAD
+[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.36...HEAD
+[0.0.36]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.35...v0.0.36
 [0.0.35]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.34...v0.0.35
 [0.0.34]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.33...v0.0.34
 [0.0.33]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.32...v0.0.33

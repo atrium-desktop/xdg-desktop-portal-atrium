@@ -210,7 +210,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atrium-arca-contract"
-version = "0.0.35"
+version = "0.0.36"
 dependencies = [
  "serde",
  "serde_json",
@@ -218,11 +218,11 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-apps"
-version = "0.0.35"
+version = "0.0.36"
 
 [[package]]
 name = "atrium-portal-cast"
-version = "0.0.35"
+version = "0.0.36"
 dependencies = [
  "atrium-portal-ipc",
  "libc",
@@ -232,7 +232,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-ipc"
-version = "0.0.35"
+version = "0.0.36"
 dependencies = [
  "libc",
  "serde",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-request"
-version = "0.0.35"
+version = "0.0.36"
 dependencies = [
  "async-channel",
  "libc",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-secret"
-version = "0.0.35"
+version = "0.0.36"
 dependencies = [
  "atrium-portal-request",
  "log",
@@ -1535,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "xdg-desktop-portal-atrium"
-version = "0.0.35"
+version = "0.0.36"
 dependencies = [
  "async-channel",
  "atrium-arca-contract",
