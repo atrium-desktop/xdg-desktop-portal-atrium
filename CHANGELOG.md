@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.37] - 2026-10-31
+
 ### Changed
 
 - **Migrated to zbus 6 ([ADR-0029](docs/adr/0029-zbus-6-migration.md)).**
@@ -931,7 +933,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.36...HEAD
+[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.37...HEAD
+[0.0.37]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.36...v0.0.37
 [0.0.36]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.35...v0.0.36
 [0.0.35]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.34...v0.0.35
 [0.0.34]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.33...v0.0.34
