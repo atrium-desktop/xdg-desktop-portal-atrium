@@ -36,6 +36,8 @@ fn native_secret_portal_end_to_end() {
     assert!(sigil.bind_error().is_none(), "fake sigil must bind");
     let _daemon = KillOnDrop(spawn_daemon(&bus, &data_dir, &runtime_dir));
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     let fdo = bus::proxy(
         &conn,
@@ -247,6 +249,8 @@ fn public_frontend_delivers_the_native_secret() {
         ));
     let _backend = KillOnDrop(backend.spawn().expect("spawn Tessera backend"));
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     let frontend_log = root.join("frontend.log");
     let mut frontend_command = Command::new(frontend);
@@ -329,4 +333,140 @@ fn public_frontend_delivers_the_native_secret() {
     assert_eq!(delivered.as_slice(), served.as_slice());
 
     std::fs::remove_dir_all(root).ok();
+}
+
+/// A locked vault is unbounded in wall-clock time, so the sigil round trip
+/// must never run on the connection's runtime.
+///
+/// The failure this guards is *daemon-wide*: zbus 6 dispatches interface
+/// methods as tasks on the connection's shared runtime, so an interface that
+/// waits for sigil inside its served method takes every other portal
+/// interface down with it. A wedged sigil (accepts the request, never answers)
+/// is therefore the sharpest probe: the Secret call itself is expected to be
+/// outstanding, but unrelated interfaces must keep answering.
+#[test]
+fn a_wedged_sigil_does_not_stall_other_interfaces() {
+    let Some(bus) = private_bus() else {
+        eprintln!("a_wedged_sigil_does_not_stall_other_interfaces: no dbus-daemon, skipping");
+        return;
+    };
+    let conn = bus.connect();
+    let data_dir = temp_dir("stall-data");
+    let runtime_dir = temp_dir("stall-runtime");
+    let sigil = FakeSigil::bind(&runtime_dir, FakeSigilResponse::Stall);
+    assert!(sigil.bind_error().is_none(), "fake sigil must bind");
+    let _daemon = KillOnDrop(spawn_daemon(&bus, &data_dir, &runtime_dir));
+    wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
+
+    // Leave a RetrieveSecret outstanding against the stalled sigil.
+    let secret = bus::proxy(
+        &conn,
+        PORTAL,
+        DESKTOP_PATH,
+        "org.freedesktop.impl.portal.Secret",
+    );
+    let (read_end, write_end) = pipe_pair();
+    std::thread::spawn(move || {
+        let fd: Fd<'_> = Fd::from(write_end);
+        let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/stall/secret")
+            .expect("request handle path");
+        let _outcome: Result<(u32, HashMap<String, zbus::zvariant::OwnedVariant>), _> =
+            bus::try_call(
+                &secret,
+                "RetrieveSecret",
+                &(
+                    handle,
+                    "dev.tessera.stall",
+                    fd,
+                    HashMap::<String, Variant<'_>>::new(),
+                ),
+            );
+    });
+
+    // Wait until the request has actually reached the stalled sigil. A fixed
+    // sleep would let the test pass while the request was still in flight
+    // before the backend, proving nothing about the interface.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while sigil.observed().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the RetrieveSecret never reached sigil; the stall was not exercised"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // The probes: interfaces that owe nothing to sigil must still answer.
+    //
+    // Each probe asserts a *real* reply, not merely that the call returned:
+    // an unrelated D-Bus error (wrong method name, unknown interface) would
+    // arrive promptly even from a wedged daemon and prove nothing.
+    // `Lockdown` exposes kebab-case read-write *properties* (the backend ABI
+    // spelling), not methods; `Settings.Read` answers the colour scheme.
+    let lockdown = bus::proxy(
+        &conn,
+        PORTAL,
+        DESKTOP_PATH,
+        "org.freedesktop.impl.portal.Lockdown",
+    );
+    let disabled: bool = probe("Lockdown.disable-printing", move || {
+        bus::run(lockdown.get_property("disable-printing"))
+    });
+    assert!(!disabled, "Lockdown must start without printing disabled");
+
+    let settings = bus::proxy(
+        &conn,
+        PORTAL,
+        DESKTOP_PATH,
+        "org.freedesktop.impl.portal.Settings",
+    );
+    // The backend's `Read` returns a variant even though the colour scheme
+    // itself is a `u32`; decoding the variant proves a real value came back.
+    let scheme: zbus::zvariant::OwnedVariant = probe("Settings.Read", move || {
+        bus::try_call(
+            &settings,
+            "Read",
+            &("org.freedesktop.appearance", "color-scheme"),
+        )
+    });
+    let scheme = u32::try_from(&scheme).expect("colour scheme must decode as u32");
+    assert!(
+        scheme <= 1,
+        "colour scheme must be a known value, got {scheme}"
+    );
+
+    // The stalled request is still outstanding: sigil was asked and never
+    // answered, and the caller has received nothing. This is the premise the
+    // probes above depend on, so assert it rather than assume it.
+    assert_eq!(
+        sigil.observed().len(),
+        1,
+        "exactly one GetApplicationSecret request should be stalled"
+    );
+    // Nothing was written to the caller's pipe, because sigil never answered.
+    drop(read_end);
+}
+
+/// Run `call` on a detached thread and require a genuine reply within 5 s.
+///
+/// A wedged daemon produces no reply at all, which is what the deadline
+/// catches; a *wrong* call produces an error promptly, which the caller's own
+/// type assertion then rejects.
+fn probe<T, F>(label: &str, call: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, zbus::Error> + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = tx.send(call());
+    });
+    let reply = rx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|error| {
+        panic!(
+            "{label} did not answer within 5s while a RetrieveSecret was outstanding ({error}); \
+             the secret work is blocking the connection runtime"
+        )
+    });
+    reply.unwrap_or_else(|error| panic!("{label} failed: {error}"))
 }

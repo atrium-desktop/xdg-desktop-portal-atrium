@@ -138,22 +138,32 @@ impl RestoreStore {
         Some(token)
     }
 
-    /// Resolve a token presented by `app_id`. `servable` reports whether
-    /// the compositor can still capture the stored source (a whole-desktop
-    /// selection is always servable; a connector selection needs protocol
-    /// 29 and the connector still present). Any failure — unknown token,
-    /// wrong application, unservable selection — returns `None`, which the
-    /// caller treats as "no usable restore data" per the contract.
+    /// Resolve a token presented by `app_id`. Mode-2 tokens must match
+    /// `owner` (the caller's D-Bus unique name) in addition to `app_id`, so
+    /// another connection of the application cannot hijack the in-memory
+    /// grant. Mode-1 tokens on disk are validated against `app_id`.
+    ///
+    /// `servable` reports whether the compositor can still capture the stored
+    /// source (a whole-desktop selection is always servable; a connector
+    /// selection needs protocol 29 and the connector still present). Any failure
+    /// — unknown token, wrong application, unservable selection — returns
+    /// `None`, which the caller treats as "no usable restore data" per the
+    /// contract.
     pub(crate) fn validate(
         &mut self,
         token: &str,
         app_id: &str,
+        owner: Option<&str>,
         servable: &dyn Fn(&StoredSource) -> bool,
     ) -> Option<(u32, StoredSelection)> {
-        for entry in self.memory.values().flatten() {
-            if entry.token == token {
-                return (entry.selection.app_id == app_id && servable(&entry.selection.source))
-                    .then(|| (2, entry.selection.clone()));
+        if let Some(owner) = owner
+            && let Some(entries) = self.memory.get(owner)
+        {
+            for entry in entries {
+                if entry.token == token {
+                    return (entry.selection.app_id == app_id && servable(&entry.selection.source))
+                        .then(|| (2, entry.selection.clone()));
+                }
             }
         }
         if let Some(entry) = self.disk.iter().find(|entry| entry.token == token) {
@@ -205,12 +215,28 @@ pub(crate) fn data_dir() -> Option<PathBuf> {
 
 /// Read and parse the store file; any failure is an empty store.
 fn read_store(path: &Path) -> Option<Vec<StoredEntry>> {
-    let metadata = std::fs::metadata(path).ok()?;
-    if !metadata.is_file() || metadata.len() > MAX_STORE_BYTES {
-        log::warn!("portal: refusing an oversized or non-regular restore store");
-        return None;
-    }
-    let bytes = std::fs::read(path).ok()?;
+    let dir = path.parent()?;
+    let name = path.file_name()?.to_str()?;
+    // Same `O_NOFOLLOW` discipline the writer uses: the store grants capture
+    // consent, so a symlink substituted by another process of this user must
+    // not be followed.
+    let bytes = match crate::atomic::read_atomic(dir, name, MAX_STORE_BYTES) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            log::debug!(
+                "portal: no usable screencast restore store at {}",
+                path.display()
+            );
+            return None;
+        }
+        Err(error) => {
+            log::warn!(
+                "portal: could not read the screencast restore store {}: {error}",
+                path.display()
+            );
+            return None;
+        }
+    };
     let store: DiskStore = serde_json::from_slice(&bytes)
         .map_err(|error| {
             log::warn!("portal: ignoring a corrupt screencast restore store: {error}");
@@ -275,7 +301,7 @@ mod tests {
             .expect("mode-1 token");
         assert_eq!(token.len(), 32);
         let (mode, restored) = store
-            .validate(&token, "org.example.App", &always)
+            .validate(&token, "org.example.App", None, &always)
             .expect("token validates");
         assert_eq!(mode, 1);
         assert_eq!(restored, selection("org.example.App"));
@@ -289,7 +315,7 @@ mod tests {
         );
         let mut reloaded = RestoreStore::load(Some(dir.clone()));
         assert_eq!(
-            reloaded.validate(&token, "org.example.App", &always),
+            reloaded.validate(&token, "org.example.App", None, &always),
             Some((1, selection("org.example.App")))
         );
         std::fs::remove_dir_all(dir).unwrap();
@@ -304,7 +330,7 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .validate(&token, "org.example.Other", &always)
+                .validate(&token, "org.example.Other", None, &always)
                 .is_none()
         );
         assert!(
@@ -312,6 +338,7 @@ mod tests {
                 .validate(
                     "00000000000000000000000000000000",
                     "org.example.App",
+                    None,
                     &always
                 )
                 .is_none()
@@ -326,11 +353,26 @@ mod tests {
             .issue(2, ":1.42", selection("org.example.App"))
             .expect("mode-2 token");
         assert_eq!(
-            store.validate(&token, "org.example.App", &always),
+            store.validate(&token, "org.example.App", Some(":1.42"), &always),
             Some((2, selection("org.example.App")))
         );
+        // Another connection of the same app never sees the token.
+        assert!(
+            store
+                .validate(&token, "org.example.App", Some(":1.99"), &always)
+                .is_none()
+        );
+        assert!(
+            store
+                .validate(&token, "org.example.App", None, &always)
+                .is_none()
+        );
         store.drop_owner(":1.42");
-        assert!(store.validate(&token, "org.example.App", &always).is_none());
+        assert!(
+            store
+                .validate(&token, "org.example.App", Some(":1.42"), &always)
+                .is_none()
+        );
         // Another connection of the same app never sees the token.
         assert!(store.issue(2, "", selection("org.example.App")).is_none());
     }
@@ -346,6 +388,7 @@ mod tests {
                 .validate(
                     "00000000000000000000000000000000",
                     "org.example.App",
+                    None,
                     &always
                 )
                 .is_none()
@@ -357,7 +400,7 @@ mod tests {
         let mut reloaded = RestoreStore::load(Some(dir.clone()));
         assert!(
             reloaded
-                .validate(&token, "org.example.App", &always)
+                .validate(&token, "org.example.App", None, &always)
                 .is_some()
         );
         std::fs::remove_dir_all(dir).unwrap();
@@ -378,12 +421,14 @@ mod tests {
         let nothing_servable = |_: &StoredSource| false;
         assert!(
             store
-                .validate(&token, "org.example.App", &nothing_servable)
+                .validate(&token, "org.example.App", None, &nothing_servable)
                 .is_none()
         );
         store.prune(&nothing_servable);
         assert!(
-            store.validate(&token, "org.example.App", &always).is_none(),
+            store
+                .validate(&token, "org.example.App", None, &always)
+                .is_none(),
             "a pruned token stays invalid even when it becomes servable again"
         );
         std::fs::remove_dir_all(dir).unwrap();

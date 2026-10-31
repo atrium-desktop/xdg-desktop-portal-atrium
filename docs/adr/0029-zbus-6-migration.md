@@ -64,6 +64,58 @@ Assembly (`run()`) installs every interface, requests the bus name, and pings
 the bus through `Driver::call`. The main loop keeps the process tied to the
 connection exactly as before.
 
+### 2a. Nothing served may block or `block_on` the connection runtime
+
+The rule above forbids `block_on` in an interface method. The same reasoning
+forbids every other unbounded wait there, because the method runs **on the
+connection's runtime**: anything that parks that task parks the thread that
+also reads the socket and dispatches every other interface's methods. A hung
+method does not merely fail its own caller — the whole backend stops answering
+while still owning its bus name, so clients hang instead of failing cleanly.
+
+Three shapes are therefore required, and all three bindings the interfaces
+that can block use them:
+
+- **Await, never block.** A method that must reach another service (logind for
+  `Inhibit`) awaits the call. The future yields to the runtime, so the
+  connection keeps serving. `Inhibit` does this directly.
+- **Dispatch to a worker, never wait inline.** A method whose work is unbounded
+  in wall-clock time because it waits on a human (`RetrieveSecret`, which waits
+  for sigil's unlock prompt; `FileChooser`, `ScreenCast`, `Print`) exports the
+  `Request` object, sends a job over its supervised bounded queue, and awaits a
+  one-slot reply. The blocking happens on the worker's thread, which owes
+  nothing to the connection. `atrium_portal_request::dispatch` is that shape.
+- **`try_send`, never `send`.** A bounded queue's `send` blocks when full.
+  `Session::Close` was the one method that used it; a full screencast queue
+  would stall the runtime. Full queues answer or defer, and never wait inline.
+
+A blocking section that genuinely cannot move — writing to a caller-supplied
+descriptor — must additionally be bounded, so a non-draining reader costs one
+request rather than the daemon. Because supervision only restarts a worker that
+*panics*, a worker that blocks is blocked for the session: interfaces whose work
+can block indefinitely (`RetrieveSecret`) therefore run each request on its own
+bounded task thread rather than serving the queue serially.
+
+Two further rules follow from the same premise:
+
+- **Bound what the method waits on, in both directions.** `Driver::call` bounds
+  the enqueue as well as the answer: a wedged driver is precisely one whose
+  queue is not draining, so an unbounded `send` on a full queue would make the
+  answer timeout unreachable.
+- **A bounded queue needs a non-blocking producer.** A deferral queue behind a
+  wedged consumer is only safe if producing into it cannot block and cannot grow
+  without bound.
+
+### 2b. Every wait on another process is bounded
+
+Portals talk to services that can be wedged: the compositor, sigil, logind,
+`lp`, `arca`. An unbounded read on any of them converts their hang into this
+daemon's hang. Each client carries a timeout and reports a typed error when it
+fires, so the failure is attributed (`atrium-portal-secret`'s socket timeout,
+`atrium-portal-ipc`'s `RPC_TIMEOUT`, `atrium-portal-cast`'s `IPC_TIMEOUT`).
+Where a timeout is long by design — sigil's, which outlasts a user typing a
+password — the work must also run off the connection runtime (2a).
+
 ### 3. `Value` → `Variant` is applied everywhere, not aliased
 
 The workspace imports `Variant`, `OwnedVariant`, `Structure`, `Dict`, `Array`,

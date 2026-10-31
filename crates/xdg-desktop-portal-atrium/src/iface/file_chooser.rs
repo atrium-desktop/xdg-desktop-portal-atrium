@@ -34,6 +34,9 @@ pub(crate) enum FileChooserJob {
 }
 
 pub(crate) struct FileChooserIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     pub(crate) conn: zbus::Connection,
     pub(crate) tracker: Arc<Mutex<RequestTracker>>,
     pub(crate) jobs: mpsc::SyncSender<FileChooserJob>,
@@ -48,7 +51,15 @@ impl FileChooserIface {
         parent_window: &str,
         title: &str,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let parsed = parse_options(&options);
         let request = FileChooserRequest {
             mode: if parsed.directory {
@@ -80,7 +91,15 @@ impl FileChooserIface {
         parent_window: &str,
         title: &str,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let parsed = parse_options(&options);
         let request = FileChooserRequest {
             mode: FileChooserMode::SaveFile,
@@ -108,7 +127,15 @@ impl FileChooserIface {
         parent_window: &str,
         title: &str,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let parsed = parse_options(&options);
         let request = FileChooserRequest {
             mode: FileChooserMode::SaveFiles,

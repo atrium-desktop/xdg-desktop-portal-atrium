@@ -52,6 +52,9 @@ pub(crate) enum WallpaperJob {
 /// The served wallpaper interface. The method only validates and enqueues;
 /// the slow work (image read, consent prompt, IPC) runs on the worker.
 pub(crate) struct WallpaperIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     pub(crate) conn: zbus::Connection,
     pub(crate) tracker: Arc<Mutex<RequestTracker>>,
     pub(crate) jobs: mpsc::SyncSender<WallpaperJob>,
@@ -66,7 +69,15 @@ impl WallpaperIface {
         parent_window: &str,
         uri: &str,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<u32> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let path = handle.as_str().to_string();
         log::info!("portal: SetWallpaperURI for '{app_id}' at {path}: {uri}");
 

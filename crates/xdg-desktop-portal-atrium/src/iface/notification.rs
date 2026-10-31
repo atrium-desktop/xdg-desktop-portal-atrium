@@ -36,6 +36,8 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use std::sync::Arc;
+
 use zbus::Variant;
 
 use crate::ipc;
@@ -48,13 +50,19 @@ const MAX_TOTAL_IDS: usize = 256;
 
 /// The served notification interface.
 pub(crate) struct NotificationIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     /// Live-id bookkeeping for the spec's per-application and global caps.
     live: std::sync::Arc<std::sync::Mutex<LiveNotifications>>,
 }
 
 impl NotificationIface {
-    pub(crate) fn new(live: std::sync::Arc<std::sync::Mutex<LiveNotifications>>) -> Self {
-        Self { live }
+    pub(crate) fn new(
+        live: std::sync::Arc<std::sync::Mutex<LiveNotifications>>,
+        callers: Arc<atrium_portal_request::CallerGuard>,
+    ) -> Self {
+        Self { live, callers }
     }
 }
 
@@ -65,7 +73,15 @@ impl NotificationIface {
         app_id: &str,
         id: &str,
         notification: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<()> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         log::info!("portal: AddNotification for '{app_id}' id '{id}'");
         let parsed =
             parse_notification(app_id, id, &notification).map_err(zbus::fdo::Error::InvalidArgs)?;
@@ -80,7 +96,18 @@ impl NotificationIface {
             .map_err(|error| zbus::fdo::Error::Failed(format!("notify thread: {error}")))
     }
 
-    async fn remove_notification(&self, app_id: &str, id: &str) -> zbus::fdo::Result<()> {
+    async fn remove_notification(
+        &self,
+        app_id: &str,
+        id: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+    ) -> zbus::fdo::Result<()> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         log::info!("portal: RemoveNotification for '{app_id}' id '{id}'");
         if valid_id(app_id).is_err() || valid_id(id).is_err() {
             // Withdrawing a malformed or unknown id is a no-op success.

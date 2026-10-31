@@ -6,6 +6,11 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// `Lockdown` serves only properties, which zbus answers without a message
+/// header, so it cannot apply admission at all. It carries no guard for that
+/// reason: the state is a set of sandbox-policy booleans, never secret, and
+/// property access is documented as unauthenticated in
+/// `atrium_portal_request::caller`.
 #[derive(Default)]
 pub(crate) struct LockdownIface {
     disable_printing: AtomicBool,

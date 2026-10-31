@@ -70,6 +70,8 @@ fn preferences_reach_the_settings_projection() {
             .expect("spawn portal daemon"),
     );
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     let scheme = u32::try_from(read(&conn, "color-scheme")).expect("color-scheme is a u32");
     assert_eq!(
@@ -116,6 +118,8 @@ fn a_missing_compositor_leaves_the_default_projection() {
             .expect("spawn portal daemon"),
     );
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     let scheme = u32::try_from(read(&conn, "color-scheme")).expect("color-scheme is a u32");
     assert_eq!(scheme, 0, "an un-primed store reports `system`");

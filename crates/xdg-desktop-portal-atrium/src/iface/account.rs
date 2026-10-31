@@ -36,6 +36,9 @@ pub(crate) enum AccountJob {
 /// The served account interface. The method only registers the request
 /// object and enqueues; the consent prompt happens on the worker.
 pub(crate) struct AccountIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     /// Async handle onto the same connection; only used inside served
     /// methods, which already run on zbus's executor (screenshot precedent).
     pub(crate) conn: zbus::Connection,
@@ -51,7 +54,15 @@ impl AccountIface {
         app_id: &str,
         window: &str,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let path = handle.as_str().to_string();
         log::info!("portal: GetUserInformation for '{app_id}' at {path}");
 

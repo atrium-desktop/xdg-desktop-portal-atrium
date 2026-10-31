@@ -15,6 +15,136 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- **`app_id` can no longer be forged by calling the backend directly.** Every
+  backend method takes `app_id` as a plain string and nothing in the protocol
+  proves it, so an unprivileged caller could name any application. That is
+  cosmetic for some interfaces and severe for others: `app_id` is rendered into
+  compositor consent text, keys `Background`'s autostart file, binds ScreenCast
+  restore tokens, and — the sharp end — is the *subject* the Secret portal
+  derives a per-application master secret for. Any same-user process able to
+  reach the service could have asked for another application's master secret by
+  typing its name and read every credential it stored.
+
+  The backend is now a private service: every served method requires the
+  message sender to be the unique bus name owned by the portal frontend
+  (`org.freedesktop.portal.Desktop`), which resolves the sandboxed
+  application's identity itself. The check is an in-memory comparison against a
+  cache maintained from `NameOwnerChanged`, so it can neither block the
+  connection's runtime nor re-enter it, and it fails closed when the frontend is
+  absent. `SECURITY.md` records the boundary, and
+  `tests/admission.rs` asserts both the refusal for an ordinary peer and the
+  acceptance for the name's owner.
+- **The standing constraint that follows:** properties cannot apply admission
+  (zbus refuses a property accessor that takes a message header), so a property
+  may only ever carry a protocol constant or a non-secret policy flag. The
+  currently exposed properties are pinned by a test.
+
+### Fixed
+
+- **`Inhibit` no longer panics and hangs its caller.** The logind round trip
+  was made through `atrium_portal_request::block_on` inside the served method.
+  zbus 6 runs interface methods as tasks on the connection's own runtime, so
+  that call waited for the very thread it was on: `zruntime` panicked the
+  dispatch task, the client hung until its own timeout, and — because the panic
+  fired before logind was asked — the inhibition silently never happened. Every
+  idle/suspend inhibit request was affected, i.e. the common "keep the screen
+  awake" path. The client seam is now asynchronous and the logind call is
+  awaited on a connection configured with a 10-second `method_timeout`, so the
+  connection keeps serving and an unanswering logind fails truthfully instead
+  of hanging indefinitely. The `Request` object is also exported *before* the
+  lock is taken, so the `Close` that releases the inhibition always exists;
+  a `Close` arriving inside that window is recorded and releases the inhibition
+  the call is about to store.
+- **`RetrieveSecret` can no longer stall the whole daemon.** The sigil round
+  trip ran inside the served method with no socket timeout. sigil prompts for a
+  password when the vault is locked, so a locked vault pinned the connection's
+  runtime for as long as the user took — and a wedged sigil pinned it forever.
+  Every other interface (Settings, ScreenCast, FileChooser, …) stopped
+  answering for the duration. Retrieval now runs on a supervised worker behind
+  the same `dispatch` shape every other blocking interface uses, and the sigil
+  socket has a bounded read/write timeout that reports a typed error instead of
+  waiting. Writing into the caller-supplied descriptor is bounded on readiness
+  (5-second poll) so an undrained pipe cannot block the task thread.
+  `Request.Close` is honoured both before the request reaches sigil and after
+  it answers, so a caller that gave up gets response code 1 rather than a
+  secret it no longer wants.
+- **Mode-2 ScreenCast restore tokens are strictly bound to their creator.** In
+  addition to matching `app_id`, memory-resident restore tokens are validated
+  against the caller's unique bus name (`owner`), preventing another connection
+  from redeeming an in-memory token grant. Mode-2 tokens vanish when the owner
+  leaves the bus.
+- **`Session.Close` no longer blocks the connection runtime.** It was the one
+  interface method using a blocking `send` on a bounded queue instead of
+  `try_send`. A full screencast queue therefore stalled every interface sharing
+  the connection until the worker drained a job. A full queue is now handed to
+  a single process-wide deferred-close pump, so `Close` answers immediately and
+  teardown still cannot be dropped.
+- **A panicking connection-driver job no longer kills the driver thread.** The
+  thread is the connection's only pump, so losing it stranded every interface
+  at once. Jobs are now isolated, and `Driver::call` bounds its wait instead of
+  hanging forever on a wedged driver.
+- **The minimum-supported-Rust clippy gate passes again.** Two `SAFETY`
+  comments in `atrium-portal-cast` sat *inside* their `unsafe` blocks, which
+  clippy 0.1.89 (the MSRV toolchain) does not recognise; CI's `msrv` job failed
+  on them while stable passed.
+- **Temporary file creation in `Background` and `mimeapps` is hardened.**
+  `write_autostart_entry` and `set_default_app` previously used predictable
+  PID-based temporary names with `std::fs::write`, which follows existing files
+  and symlinks. Both now use unique 64-bit random suffixes with exclusive
+  creation (`create_new(true)`, `O_CREAT | O_EXCL`), ensuring a pre-planted file
+  or symlink is refused rather than written through.
+- **Launched applications are reaped.** `atrium-portal-apps` documented that
+  "`SIGCHLD` is ignored process-wide", but no such handling existed anywhere in
+  the tree: every `OpenURI`/`OpenFile` launch dropped its `Child`, so a resident
+  daemon accumulated one zombie per open request for the life of the session. A
+  single reaper thread now collects them.
+
+### Security
+
+- **The ScreenCast restore store is read without following symlinks.** The
+  writer already used an `O_NOFOLLOW`-verified directory, but the reader used
+  `std::fs::metadata`/`read`, which follow. Since a restore token skips every
+  consent dialog, another process of the same user could substitute a token
+  file the daemon never wrote and obtain capture without a prompt. Reads now
+  use the same discipline as writes (`O_NOFOLLOW`, regular-file and owner
+  checks, bounded length) and treat anything else as "nothing stored".
+- **Bounded the compositor-announced dmabuf slot count.** The slot count sized
+  a `Vec` before a single descriptor was read, so `u32::MAX` in a 40-byte reply
+  asked for tens of gigabytes. It is now validated against a bound first. (The
+  sigil payload length was already bounded before this change.)
+- **`percent_decode` no longer panics on a multi-byte character.** It sliced a
+  `&str` at `index + 1..index + 3`, which is not a char boundary when the byte
+  after `%` begins a multi-byte character. Current callers reject such URIs
+  before reaching it, so this was latent rather than reachable; it is fixed at
+  the byte level so a future reordering cannot expose it.
+
+- **ScreenCast sessions and logind inhibitions are reclaimed when their owner
+  leaves the bus.** A client that crashes never sends `Session.Close`, so its
+  session kept a compositor capture — and one of the 16 live-cast slots — until
+  the portal restarted, and its `Inhibit` kept a logind lock for the session.
+  The `NameOwnerChanged` watcher now reclaims both. Session teardown is
+  idempotent, so the GC and a racing `CloseSession` cannot leave an exported
+  object behind or skip the `Closed` signal.
+- **The bus-name watcher no longer dies on a lag.** One burst of bus traffic
+  used to end the watcher for the life of the process, silently disabling every
+  reclamation above; it now re-subscribes.
+- **A wedged cast can no longer grow the deferred-close queue without bound.**
+  The pump's channel is bounded, and its enqueue is non-blocking — it runs on
+  the connection's runtime, so a blocking send there would reintroduce the stall
+  the pump exists to prevent.
+- **The Wallpaper reader refuses non-regular files.** `File::open` on a FIFO
+  blocks until a writer appears, so a caller could park all 32 wallpaper task
+  threads by naming a FIFO and never writing to it, permanently refusing every
+  later wallpaper request. The read is now `O_NONBLOCK|O_NOFOLLOW` and requires
+  a regular file.
+
+### Documentation
+
+- **`docs/reference/portal-support.md`** records how the Secret and Inhibit
+  interfaces stay off the connection's runtime.
+
 ## [0.0.37] - 2026-10-31
 
 ### Changed

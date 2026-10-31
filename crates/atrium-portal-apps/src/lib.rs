@@ -368,11 +368,24 @@ impl AppDirs {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let suffix = rand::random::<u64>();
         let temp = self
             .config_home
-            .join(format!(".mimeapps.list.tessera-{}", std::process::id()));
-        std::fs::write(&temp, updated)?;
-        std::fs::rename(&temp, &path)
+            .join(format!(".mimeapps.list.tessera-{suffix:016x}.tmp"));
+        let result = (|| {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp)?;
+            file.write_all(updated.as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&temp, &path)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+        result
     }
 }
 

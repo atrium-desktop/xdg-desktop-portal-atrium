@@ -58,6 +58,9 @@ pub(crate) enum PrintJob {
 
 /// The served print interface.
 pub(crate) struct PrintIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     pub(crate) conn: zbus::Connection,
     pub(crate) tracker: Arc<Mutex<RequestTracker>>,
     pub(crate) jobs: mpsc::SyncSender<PrintJob>,
@@ -75,7 +78,15 @@ impl PrintIface {
         settings: HashMap<String, Variant<'_>>,
         page_setup: HashMap<String, Variant<'_>>,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let path = handle.as_str().to_string();
         log::info!("portal: PreparePrint for '{app_id}' at {path}");
         for ignored in ["modal", "accept_label"] {
@@ -94,6 +105,7 @@ impl PrintIface {
         response
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn print(
         &self,
         handle: ObjectPath<'_>,
@@ -102,7 +114,15 @@ impl PrintIface {
         title: &str,
         fd: OwnedFd,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let path = handle.as_str().to_string();
         log::info!("portal: Print for '{app_id}' at {path}");
         if options.contains_key("modal") {

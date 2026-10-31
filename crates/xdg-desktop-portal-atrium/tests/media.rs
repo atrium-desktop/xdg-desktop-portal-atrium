@@ -249,6 +249,8 @@ fn screenshot_and_color_cross_real_daemon_and_scoped_ipc() {
     ));
     let _daemon = KillOnDrop(backend.spawn().expect("spawn portal daemon"));
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     let screenshot = bus::proxy(
         &conn,
@@ -632,6 +634,8 @@ fn screencast_republishes_compositor_frames_through_real_pipewire() {
     ));
     let _daemon = KillOnDrop(backend.spawn().expect("spawn portal daemon"));
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     let screencast = bus::proxy(
         &conn,
@@ -918,6 +922,8 @@ fn dmabuf_cast_fixture(
     ));
     let daemon = KillOnDrop(backend.spawn().expect("spawn portal daemon"));
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
     let session_path = format!("/org/freedesktop/portal/desktop/session/1/{tag}");
     let (node_id, _) = start_cast_session(&conn, &session_path, tag);
     assert_eq!(
@@ -1386,6 +1392,8 @@ fn cast_env(
     ));
     let daemon = KillOnDrop(backend.spawn().expect("spawn portal daemon"));
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
     Some(CastEnv {
         conn,
         fake,
@@ -1427,6 +1435,8 @@ fn headless_cast_env(tag: &str, outputs: Vec<atrium_portal_ipc::OutputInfo>) -> 
     ));
     let daemon = KillOnDrop(backend.spawn().expect("spawn portal daemon"));
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
     Some(CastEnv {
         conn,
         fake,

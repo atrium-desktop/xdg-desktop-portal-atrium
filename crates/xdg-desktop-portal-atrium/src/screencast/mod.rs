@@ -204,6 +204,9 @@ fn validate_select(options: &SelectOptions, protocol: u32) -> Result<(), String>
 /// The served ScreenCast interface. Methods register request/session
 /// objects and enqueue; the worker does everything blocking.
 pub(crate) struct ScreenCastIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     pub(crate) conn: zbus::Connection,
     pub(crate) tracker: Arc<Mutex<RequestTracker>>,
     pub(crate) sessions: Arc<Mutex<SessionRegistry>>,
@@ -218,7 +221,15 @@ impl ScreenCastIface {
         session_handle: ObjectPath<'_>,
         app_id: &str,
         _options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let request_path = handle.as_str().to_string();
         let session_path = session_handle.as_str().to_string();
         atrium_portal_request::register(&self.conn, &self.tracker, &request_path).await?;
@@ -227,8 +238,12 @@ impl ScreenCastIface {
             atrium_portal_request::finish(&self.conn, &self.tracker, &request_path).await;
             return Ok((1, HashMap::new()));
         }
-        let insert_result =
-            { sync::lock(&self.sessions, "screencast sessions").insert(&session_path, app_id) };
+        // The caller's unique name, so a session whose owner vanishes can be
+        // torn down instead of holding a compositor capture for the session.
+        let owner: Option<String> = header.sender().map(|sender| sender.as_str().to_string());
+        let insert_result = {
+            sync::lock(&self.sessions, "screencast sessions").insert(&session_path, app_id, owner)
+        };
         if let Err(error) = insert_result {
             log::warn!("portal: CreateSession refused: {error}");
             atrium_portal_request::finish(&self.conn, &self.tracker, &request_path).await;
@@ -242,6 +257,7 @@ impl ScreenCastIface {
                 SessionIface {
                     path: session_path.clone(),
                     jobs: self.jobs.clone(),
+                    callers: Arc::clone(&self.callers),
                 },
             )
             .await;
@@ -271,6 +287,12 @@ impl ScreenCastIface {
         options: HashMap<String, Variant<'_>>,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let session_path = session_handle.as_str().to_string();
         if !sync::lock(&self.sessions, "screencast sessions").contains(&session_path) {
             return Err(zbus::fdo::Error::Failed(format!(
@@ -324,7 +346,15 @@ impl ScreenCastIface {
         app_id: &str,
         _parent_window: &str,
         _options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let session_path = session_handle.as_str().to_string();
         if !sync::lock(&self.sessions, "screencast sessions").contains(&session_path) {
             return Err(zbus::fdo::Error::Failed(format!(
@@ -571,8 +601,8 @@ fn select_sources(
     {
         let outputs = enumerate_outputs(picker, protocol);
         let servable = |source: &StoredSource| servable_source(source, protocol, &outputs);
-        let restored =
-            sync::lock(store, "screencast restore store").validate(token, app_id, &servable);
+        let restored = sync::lock(store, "screencast restore store")
+            .validate(token, app_id, sender, &servable);
         sync::lock(store, "screencast restore store").prune(&servable);
         if let Some((mode, selection)) = restored {
             let source = match &selection.source {
@@ -954,16 +984,29 @@ fn start_cast(
 }
 
 /// Stop the cast (if any), emit `Closed`, and remove the session object.
+///
+/// Idempotent, and the registry is *not* the gate on the object teardown. A
+/// session can be detached twice — `CloseSession` from the client and
+/// `SessionEnded` from the bus-name GC can both arrive, in either order — and
+/// the second arrival must still finish the object teardown the first may not
+/// have reached. Gating on `remove()` returning `Some` would make a
+/// GC-detached session skip both the `Closed` signal and the object removal,
+/// leaking an exported interface that then blocks reuse of the path forever.
 fn close_session(
     conn: &zbus::Connection,
     sessions: &Arc<Mutex<SessionRegistry>>,
     session_path: &str,
 ) {
-    let Some(session) = sync::lock(sessions, "screencast sessions").remove(session_path) else {
-        return;
-    };
-    session::stop_cast(session);
-    log::debug!("portal: screencast session {session_path} closed");
+    match sync::lock(sessions, "screencast sessions").remove(session_path) {
+        Some(session) => {
+            session::stop_cast(session);
+            log::debug!("portal: screencast session {session_path} closed");
+        }
+        None => {
+            // Already detached; the cast is gone but the object may not be.
+            log::debug!("portal: session {session_path} was already detached; finishing teardown");
+        }
+    }
     if let Err(error) = atrium_portal_request::block_on(conn.emit_signal(
         None::<&str>,
         session_path,
@@ -971,12 +1014,12 @@ fn close_session(
         "Closed",
         &(),
     )) {
-        log::warn!("portal: could not emit Closed for {session_path}: {error}");
+        log::debug!("portal: no Closed emitted for {session_path}: {error}");
     }
     if let Err(error) = atrium_portal_request::block_on(
         conn.object_server().remove::<SessionIface, _>(session_path),
     ) {
-        log::warn!("portal: could not remove {session_path}: {error}");
+        log::debug!("portal: could not remove {session_path}: {error}");
     }
 }
 

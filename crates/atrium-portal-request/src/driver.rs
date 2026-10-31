@@ -57,6 +57,15 @@ fn thread_id() -> u64 {
     u64::try_from(raw).unwrap_or(u64::MAX - 1)
 }
 
+/// How long a caller waits for the driver thread before declaring it wedged.
+///
+/// The driver runs connection work that zbus does not bound (`request_name`,
+/// name lookups, signal emission). Without a ceiling, one wedged job would
+/// pin the caller — and, for the assembly path, the whole process — while the
+/// daemon still owned its bus name, so clients would hang instead of being
+/// told the portal is unavailable.
+const DRIVER_JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl Driver {
     /// Run `job` on the driver thread and wait for its result.
     ///
@@ -65,6 +74,9 @@ impl Driver {
     /// Panics when called from the driver thread itself: that would wait for
     /// the very thread it is on, which can never answer. zbus reports the same
     /// situation (calling `block_on` inside an interface method) the same way.
+    /// Also panics when the driver does not answer within its job timeout: the
+    /// connection thread is wedged, and continuing as if it worked would place
+    /// a caller's work behind a queue that never drains.
     pub fn call<R, F>(&self, job: F) -> R
     where
         F: FnOnce(&Connection) -> R + Send + 'static,
@@ -80,12 +92,42 @@ impl Driver {
         let wrapped: Job = Box::new(move |connection| {
             let _ = reply.send(job(connection));
         });
-        self.jobs
-            .send_blocking(wrapped)
-            .expect("the connection driver has stopped");
-        response
-            .recv()
-            .expect("the connection driver dropped a job without answering")
+        // Enqueue on a bounded budget too. The driver is wedged precisely when
+        // its queue is not draining, and `send_blocking` on a full queue would
+        // then block here forever -- making the timeout below unreachable and
+        // hanging the caller (and, on the assembly path, the whole process)
+        // while it still owned its bus name.
+        //
+        // `async_channel` has no timed send, so the bound is expressed by
+        // splitting the budget: wait for room for up to `enqueue`, then wait
+        // for the answer for whatever remains.
+        let started = std::time::Instant::now();
+        let mut enqueue_failed = wrapped;
+        loop {
+            match self.jobs.try_send(enqueue_failed) {
+                Ok(()) => break,
+                Err(async_channel::TrySendError::Closed(_)) => {
+                    panic!("the connection driver has stopped")
+                }
+                Err(async_channel::TrySendError::Full(job)) => {
+                    enqueue_failed = job;
+                    if started.elapsed() >= DRIVER_JOB_TIMEOUT {
+                        panic!(
+                            "the connection driver queue did not accept a job within \
+                             {DRIVER_JOB_TIMEOUT:?}; its connection work is wedged"
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        }
+        let remaining = DRIVER_JOB_TIMEOUT.saturating_sub(started.elapsed());
+        response.recv_timeout(remaining).unwrap_or_else(|_| {
+            panic!(
+                "the connection driver thread did not answer within {DRIVER_JOB_TIMEOUT:?}; \
+                 its connection work is wedged"
+            )
+        })
     }
 
     /// Whether the caller is already on the driver thread.
@@ -112,7 +154,18 @@ pub fn spawn(connection: Connection, name: &str) -> std::io::Result<Driver> {
             // reactor runs between polls of this future.
             zbus::block_on(async {
                 while let Ok(job) = queue.recv().await {
-                    job(&connection);
+                    // A job that panics must not take the driver thread with
+                    // it: the thread is the connection's only pump, so losing
+                    // it would strand every interface at once. Contain the
+                    // unwind and keep pumping; the caller whose job panicked
+                    // observes a dropped reply on its own side.
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        job(&connection);
+                    }))
+                    .is_err()
+                    {
+                        log::error!("the connection driver job panicked; the driver continues");
+                    }
                 }
             });
         })?;
@@ -126,4 +179,94 @@ pub fn spawn(connection: Connection, name: &str) -> std::io::Result<Driver> {
 /// The caller must not already be on a driver thread; see the module docs.
 pub fn block_on<F: std::future::Future>(future: F) -> F::Output {
     zbus::block_on(future)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panicking job must not kill the driver thread: it is the connection's
+    /// only pump, so losing it strands every interface sharing the connection.
+    #[test]
+    fn a_panicking_job_leaves_the_driver_usable() {
+        let Some(bus) = private_bus() else {
+            eprintln!("skipping: dbus-daemon is not installed");
+            return;
+        };
+        let connection = block_on(zbus::connection::Builder::address(bus.address.as_str()).build())
+            .expect("connect to the private bus");
+        let driver = spawn(connection, "driver-panic-test").expect("spawn the driver");
+
+        // A job that panics. `Driver::call` must still return afterwards.
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            driver.call(|_| panic!("job panics on purpose"));
+        }));
+        assert!(panicked.is_err(), "the caller observes the panic");
+
+        // The driver is expected to still serve jobs. Give it a moment: the
+        // catch_unwind above happens on this thread, but the driver's own
+        // isolation runs on its thread.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let value = driver.call(|_| 42_u32);
+        assert_eq!(value, 42, "the driver must keep pumping after a job panic");
+    }
+
+    /// A private `dbus-daemon` that dies with the test binary.
+    ///
+    /// The child is explicitly killed and reaped on drop (the tidy path), and
+    /// carries `PR_SET_PDEATHSIG` so the kernel still reaps it when this
+    /// binary is killed without unwinding — a timeout or a `SIGKILL` from CI.
+    /// Both halves are required by the repository's process-hygiene rule.
+    struct PrivateBus {
+        address: String,
+        child: std::process::Child,
+    }
+
+    impl Drop for PrivateBus {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    /// Start a private `dbus-daemon` and return it, or `None` when the
+    /// binary is not installed.
+    fn private_bus() -> Option<PrivateBus> {
+        use std::io::{BufRead as _, BufReader};
+        use std::os::unix::process::CommandExt as _;
+        use std::process::{Command, Stdio};
+
+        let mut command = Command::new("dbus-daemon");
+        command
+            .args(["--session", "--nofork", "--print-address=1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        // SAFETY: the closure runs in the forked child before `exec` and
+        // calls only async-signal-safe functions (`prctl`, `getppid`,
+        // `_exit`), touching no memory shared with the parent beyond the
+        // return value.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() == 1 {
+                    libc::_exit(1);
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().ok()?;
+        let stdout = child.stdout.take()?;
+        let mut line = String::new();
+        BufReader::new(stdout).read_line(&mut line).ok()?;
+        let address = line.trim().to_owned();
+        if address.is_empty() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        Some(PrivateBus { address, child })
+    }
 }

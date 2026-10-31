@@ -58,6 +58,9 @@ pub(crate) enum OpenUriJob {
 /// request object, and enqueue; the decision and the chooser dialog run on
 /// the worker.
 pub(crate) struct OpenUriIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     pub(crate) conn: zbus::Connection,
     pub(crate) tracker: Arc<Mutex<RequestTracker>>,
     pub(crate) jobs: mpsc::SyncSender<OpenUriJob>,
@@ -77,7 +80,15 @@ impl OpenUriIface {
         parent_window: &str,
         uri: &str,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         self.open(handle, app_id, parent_window, uri.to_owned(), &options)
             .await
     }
@@ -89,7 +100,15 @@ impl OpenUriIface {
         parent_window: &str,
         fd: OwnedFd,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         // Resolve the descriptor to its path, then drop it: the fd must
         // not outlive the method call.
         let uri = fd_path(&fd).map(|path| uri::file_uri(&path));

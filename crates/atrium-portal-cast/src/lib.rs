@@ -573,9 +573,9 @@ fn run_cast(
             } else {
                 None
             };
+            // SAFETY: `buffer` is a live pool buffer handed to this stream by
+            // the add_buffer event; its spa_buffer is valid.
             let Some(datas) = (unsafe {
-                // SAFETY: `buffer` is a live pool buffer handed to this
-                // stream by the add_buffer event; its spa_buffer is valid.
                 let datas = (*(*buffer).buffer).datas;
                 if datas.is_null() || (*datas).chunk.is_null() {
                     None

@@ -27,6 +27,14 @@ pub struct StreamStarted {
     pub slots: Option<Vec<StreamSlot>>,
 }
 
+/// Upper bound on a compositor-announced dmabuf slot table.
+///
+/// The slot count arrives in the reply and is otherwise bounded only by the
+/// frame size, so it is validated before it sizes an allocation. Real pools
+/// hold a handful of buffers; this is a generous ceiling on anything
+/// describable, not a tuning knob.
+const MAX_STREAM_SLOTS: usize = 64;
+
 /// One dmabuf slot of a protocol-25 stream: a fixed-size descriptor the
 /// compositor renders into until the consumer releases it.
 #[derive(Debug)]
@@ -125,10 +133,20 @@ impl Client {
         loop {
             match Self::handshake(path, requested, scope.as_deref(), version, timeout)? {
                 Ok(client) => return Ok(client),
-                Err(_) if version > MIN_PROTOCOL_VERSION => {
-                    // A refused or failed handshake at the newest version
-                    // retries one step older; the final attempt surfaces
-                    // the real error.
+                // Only a *protocol* refusal justifies negotiating further.
+                // A transport failure — a timeout above all — means the peer
+                // never answered this version, so retrying eight more of them
+                // multiplies one hung call into nine times the timeout while
+                // reporting nothing new.
+                Err(error)
+                    if version > MIN_PROTOCOL_VERSION
+                        && matches!(
+                            error.kind(),
+                            io::ErrorKind::Unsupported | io::ErrorKind::ConnectionRefused
+                        ) =>
+                {
+                    // A refused handshake at the newest version retries one
+                    // step older; the final attempt surfaces the real error.
                     version -= 1;
                 }
                 Err(error) => return Err(error),
@@ -462,6 +480,21 @@ impl Client {
                 let slots = match (format, slots, slot_stride, slot_bytes) {
                     // Protocol 25: the slot table follows the reply.
                     (StreamPixelFormat::Dmabuf { .. }, Some(count), Some(stride), Some(bytes)) => {
+                        // `count` is peer-supplied and only bounded by the
+                        // frame size, so it must not size an allocation
+                        // before a single slot is read: `u32::MAX` would ask
+                        // for tens of gigabytes. Cap it at what the protocol
+                        // can meaningfully describe; the compositor's pools
+                        // are single-digit.
+                        if count as usize > MAX_STREAM_SLOTS {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!(
+                                    "compositor announced {count} stream slots, above the \
+                                     {MAX_STREAM_SLOTS}-slot bound"
+                                ),
+                            ));
+                        }
                         let mut table = Vec::with_capacity(count as usize);
                         for _ in 0..count {
                             let file = blob::receive_dmabuf_file(&self.stream, bytes)?;

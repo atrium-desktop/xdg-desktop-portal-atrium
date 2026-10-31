@@ -51,6 +51,61 @@ pub(crate) fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<P
     result.map(|()| path)
 }
 
+/// Read `name` from `dir` under the same discipline [`write_atomic`] uses.
+///
+/// The read side needs the mirror of the write side's protection: the store
+/// lives in the user's data directory, so another process running as the same
+/// user can replace it with a symlink. Following that link would let the
+/// reader be steered at a file the writer never produced — and the ScreenCast
+/// restore store *grants capture consent*, so a substituted file is not a
+/// cosmetic problem. `O_NOFOLLOW` on the final component plus a regular-file
+/// and owner check keeps the read on files this daemon could have written.
+///
+/// A missing file, a symlink, a non-regular file, a file owned by another
+/// user, or one above `max_bytes` all yield `Ok(None)`: each means "no usable
+/// stored payload", which every caller already handles as the empty case.
+pub(crate) fn read_atomic(dir: &Path, name: &str, max_bytes: u64) -> io::Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+
+    let path = dir.join(name);
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&path)
+    {
+        Ok(file) => file,
+        // Absent, or a symlink we refuse to follow: both are "nothing stored".
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
+            ) || error.raw_os_error() == Some(libc::ELOOP) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    let metadata = file.metadata()?;
+    // SAFETY: `geteuid` reads the process's effective uid and touches no
+    // caller memory.
+    let euid = unsafe { libc::geteuid() };
+    if !metadata.is_file() || metadata.uid() != euid {
+        return Ok(None);
+    }
+    if metadata.len() > max_bytes {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    // Bound the read as well: the file could grow between the metadata check
+    // and the read.
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Ok(None);
+    }
+    Ok(Some(bytes))
+}
+
 /// Open `dir` as a real, user-owned directory without following a symlink.
 fn open_owned_dir(dir: &Path) -> io::Result<std::fs::File> {
     let file = std::fs::OpenOptions::new()
@@ -143,6 +198,49 @@ mod tests {
             "a symlinked target must be refused"
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn read_returns_what_the_writer_stored() {
+        let dir = scratch("read-roundtrip");
+        write_atomic(&dir, "store.json", b"{\"version\":1}").unwrap();
+        let bytes = read_atomic(&dir, "store.json", 1024)
+            .unwrap()
+            .expect("a written payload must read back");
+        assert_eq!(bytes, b"{\"version\":1}");
+
+        // An absent payload is the empty case, not an error.
+        assert!(read_atomic(&dir, "absent.json", 1024).unwrap().is_none());
+        // An oversized payload is refused rather than partially returned.
+        assert!(read_atomic(&dir, "store.json", 4).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The store grants capture consent, so a symlink planted in the data
+    /// directory must never be followed — it would let another process of the
+    /// same user substitute a token file the daemon never wrote.
+    #[test]
+    fn a_symlinked_payload_is_not_followed() {
+        let dir = scratch("read-symlink");
+        let secret = dir.join("elsewhere.json");
+        std::fs::write(&secret, b"{\"version\":1,\"tokens\":[]}").unwrap();
+        let link = dir.join("store.json");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+        assert!(
+            read_atomic(&dir, "store.json", 1024).unwrap().is_none(),
+            "a symlinked payload must read as absent, not be followed"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A directory (or any non-regular file) is not a stored payload.
+    #[test]
+    fn a_non_regular_payload_is_refused() {
+        let dir = scratch("read-nonregular");
+        std::fs::create_dir_all(dir.join("store.json")).unwrap();
+        assert!(read_atomic(&dir, "store.json", 1024).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

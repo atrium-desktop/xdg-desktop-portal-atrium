@@ -10,10 +10,25 @@
 //! - Header: 8 bytes `[b'S', b'I', b'G', b'L', version=2, opcode/status, u16_be payload_len]`
 //! - Request: Compact TLV fields `[u16_be len][utf-8 bytes]` without JSON heap overhead.
 //! - Response: Direct 32-byte secret payload wrapped in `Zeroizing` or typed status code.
+//!
+//! ## Every read and write is bounded
+//!
+//! sigil is an interactive daemon: when the vault is locked it raises an
+//! unlock prompt and answers only after the user types a password. A socket
+//! with no read timeout would park the calling thread for as long as that
+//! takes — minutes, or forever if the prompt is never dismissed and the
+//! daemon never writes. `SOCK_STREAM` offers no other progress signal (no
+//! EOF, no partial-delivery event), so the only defence is a bound.
+//!
+//! The bound is deliberately generous: it is not a latency budget for the
+//! user's typing, it is a liveness floor that turns "sigil is wedged" into a
+//! typed [`NativeError::TimedOut`] the caller can report, instead of a hang
+//! that propagates into the portal's own interfaces.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::time::Duration;
 use zeroize::Zeroizing;
 
 /// The default socket subpath under `$XDG_RUNTIME_DIR`, matching the sigil
@@ -27,6 +42,18 @@ const HEADER_LEN: usize = 8;
 const MAX_PAYLOAD_SIZE: usize = 4096;
 
 const OP_GET_APPLICATION_SECRET: u8 = 0x01;
+
+/// Liveness floor for one socket read or write (see the module docs).
+///
+/// Chosen to outlast a slow unlock prompt the user is actively answering
+/// while still guaranteeing a wedged sigil eventually fails the request:
+/// five minutes is well past any plausible interaction, and the portal's own
+/// `Request.Close` lets a caller abandon the wait sooner.
+pub const SOCKET_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// A secret must be written before the caller's read times out; this is the
+/// far shorter budget for the descriptor hand-off (local socket, no prompt).
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 const STATUS_SECRET: u8 = 0x01;
 const STATUS_LOCKED: u8 = 0x03;
@@ -52,6 +79,10 @@ pub enum NativeError {
     /// The socket or the framing failed.
     #[error("sigil IPC error: {0}")]
     Io(#[from] std::io::Error),
+    /// The daemon did not answer a framed read within
+    /// [`SOCKET_TIMEOUT`] (a wedged sigil, not a slow unlock).
+    #[error("sigil did not answer within {SOCKET_TIMEOUT:?}")]
+    TimedOut,
     /// The daemon answered with a variant this projection does not decode.
     #[error("unexpected sigil IPC response")]
     Unexpected,
@@ -98,6 +129,10 @@ impl SigilConnection {
         purpose: &str,
     ) -> Result<Zeroizing<Vec<u8>>, NativeError> {
         let mut stream = UnixStream::connect(&self.socket_path)?;
+        // Bound both directions *before* the first byte: an unbounded read on
+        // an interactive daemon is a potential permanent hang (module docs).
+        stream.set_read_timeout(Some(SOCKET_TIMEOUT))?;
+        stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
 
         // Encode binary request frame: [Header 8B][Payload]
         let mut frame = Vec::with_capacity(namespace.len() + subject.len() + purpose.len() + 14);
@@ -125,7 +160,7 @@ impl SigilConnection {
 
         // Read 8-byte response header
         let mut header = [0u8; HEADER_LEN];
-        stream.read_exact(&mut header)?;
+        read_exact_bounded(&mut stream, &mut header)?;
 
         if header[0..4] != WIRE_MAGIC {
             return Err(NativeError::Io(std::io::Error::new(
@@ -150,7 +185,7 @@ impl SigilConnection {
         }
 
         let mut payload_buf = Zeroizing::new(vec![0u8; payload_len]);
-        stream.read_exact(&mut payload_buf)?;
+        read_exact_bounded(&mut stream, &mut payload_buf)?;
 
         match status {
             STATUS_SECRET => Ok(payload_buf),
@@ -166,6 +201,28 @@ impl SigilConnection {
             }
             _ => Err(NativeError::Unexpected),
         }
+    }
+}
+
+/// Read exactly `buf.len()` bytes, reporting a peer that never answers.
+///
+/// A `WouldBlock`/`TimedOut` from the socket timeout is a liveness failure,
+/// not a transient one: the socket is never polled twice, and there is no
+/// partial-frame recovery worth attempting. Mapping it to
+/// [`NativeError::TimedOut`] keeps the distinction visible to the caller and
+/// out of the generic `Io` bucket.
+fn read_exact_bounded(stream: &mut UnixStream, buf: &mut [u8]) -> Result<(), NativeError> {
+    match stream.read_exact(buf) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) =>
+        {
+            Err(NativeError::TimedOut)
+        }
+        Err(error) => Err(NativeError::Io(error)),
     }
 }
 

@@ -26,10 +26,51 @@ provider; see [ADR-0020](docs/adr/0020-secret-vault-delegation-to-sigil.md)),
 and this backend only projects the `org.freedesktop.impl.portal.Secret`
 interface onto sigil's native IPC socket. The backend itself protects
 per-request secret material in transit to the caller and isolates
-per-application delivery. It is not a security boundary against processes
-running as the same user: it assumes the session's same-uid processes are
-not hostile. The subsections record the concrete postures and the known
-limitations, with their source of truth.
+per-application delivery. The subsections record the concrete postures and
+the known limitations, with their source of truth.
+
+### Who May Call This Backend
+
+`org.freedesktop.impl.portal.desktop.atrium` is a **private backend**. Its only
+client is the portal frontend, `org.freedesktop.portal.Desktop`. Every served
+method applies that rule before doing any work: the message's sender must be the
+unique bus name the frontend currently owns
+(`crates/atrium-portal-request/src/caller.rs`).
+
+This is the boundary that makes `app_id` trustworthy enough to act on. `app_id`
+arrives as a plain string and nothing in the protocol proves it, so the backend
+cannot verify it. It does not have to: the frontend resolves the sandboxed
+application's identity itself — it has sandbox metadata this process does not —
+and forwards the result. Applications reach the portal through the frontend's
+public interface and never call the backend directly.
+
+The rule is stated in terms of the sender rather than `app_id` because the
+sender is set by the bus daemon and cannot be forged, while `app_id` is
+caller-chosen. Consequences worth stating plainly:
+
+- Before the frontend appears, and after it leaves, **no** caller is admitted.
+  The guard fails closed.
+- Any peer that owns `org.freedesktop.portal.Desktop` has the frontend's
+  authority, because that is what being the frontend means. The
+  `admission` integration tests assert the refusal for an ordinary peer and the
+  acceptance for the name's owner.
+- A request object (`Session`, `Request`) is governed by the same rule as the
+  interface that created it.
+- **Properties are not admission-checked.** zbus refuses to register a property
+  accessor that takes a message header, so `Properties.Get` is answered without
+  consulting the caller. The standing constraint is therefore that a property
+  may only carry a protocol constant or a non-secret policy flag; anything
+  sensitive must be a method. `properties_are_public_and_must_stay_insensitive`
+  pins the currently exposed properties so a future sensitive one fails there.
+
+### Same-User Processes
+
+Within that boundary the backend assumes the sessions it serves are not
+hostile to each other. It is **not** a security boundary between processes
+running as the same user once they hold the frontend name: sandbox isolation
+between applications is the frontend's and the compositor's responsibility, not
+this backend's.
+
 
 ### Vault at Rest
 

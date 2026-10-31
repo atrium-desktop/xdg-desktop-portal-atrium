@@ -130,6 +130,9 @@ fn capture_token(handle: &ObjectPath<'_>) -> String {
 /// The served screenshot interface. Methods only register the request
 /// object and enqueue; all blocking work happens on the capture worker.
 pub(crate) struct ScreenshotIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     /// Async handle onto the same connection; only used inside served
     /// methods, which already run on zbus's executor (tray precedent).
     pub(crate) conn: zbus::Connection,
@@ -145,7 +148,15 @@ impl ScreenshotIface {
         app_id: &str,
         _parent_window: &str,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let options = match parse_options(&options) {
             Ok(options) => options,
             Err(error) => {
@@ -186,7 +197,15 @@ impl ScreenshotIface {
         app_id: &str,
         _parent_window: &str,
         _options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let path = handle.as_str().to_string();
         log::info!("portal: PickColor for '{app_id}' at {path}");
 

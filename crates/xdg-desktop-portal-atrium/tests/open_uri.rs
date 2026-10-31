@@ -104,6 +104,8 @@ fn a_confirmed_choice_launches_that_application() {
             .expect("spawn the portal daemon"),
     );
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     let (response, results) = open_uri(&conn, "smoke://payload");
     assert_eq!(response, 0, "a launched application reports success");
@@ -160,6 +162,8 @@ fn a_dismissed_picker_launches_nothing() {
             .expect("spawn the portal daemon"),
     );
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     let (response, results) = open_uri(&conn, "smoke://payload");
     assert_eq!(response, 1, "dismissal answers 1");

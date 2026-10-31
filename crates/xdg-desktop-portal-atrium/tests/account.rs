@@ -47,6 +47,8 @@ fn get_user_information(
             .expect("spawn portal daemon"),
     );
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     let account = bus::proxy(&conn, PORTAL, DESKTOP_PATH, IFACE);
     let mut options: HashMap<String, Variant<'_>> = HashMap::new();
@@ -133,6 +135,8 @@ fn an_unreachable_compositor_fails_closed() {
                 .expect("spawn portal daemon"),
         );
         wait_for_name(&conn, PORTAL);
+        // The backend is private: only the frontend may call it.
+        common::claim_frontend(&conn);
         let account = bus::proxy(&conn, PORTAL, DESKTOP_PATH, IFACE);
         let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1/acc2")
             .expect("request handle path");

@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
 
 const MAX_SESSIONS: usize = 128;
 const MAX_LIVE_CASTS: usize = 16;
@@ -37,6 +38,9 @@ pub(crate) struct StartSelection {
 pub(crate) struct CastSession {
     /// Application identity supplied by the frontend at `CreateSession`.
     pub(crate) app_id: String,
+    /// The D-Bus unique name that created the session, so a vanished owner's
+    /// session can be torn down instead of holding a compositor capture.
+    pub(crate) owner: Option<String>,
     pub(crate) sources_selected: bool,
     /// The armed source; meaningful once `sources_selected` holds.
     pub(crate) source: CastSource,
@@ -64,7 +68,12 @@ pub(crate) struct SessionRegistry {
 impl SessionRegistry {
     /// Register a fresh session. Duplicate paths are refused so a hostile or
     /// buggy client cannot shadow another application's session.
-    pub(crate) fn insert(&mut self, path: &str, app_id: &str) -> Result<(), String> {
+    pub(crate) fn insert(
+        &mut self,
+        path: &str,
+        app_id: &str,
+        owner: Option<String>,
+    ) -> Result<(), String> {
         if self.sessions.contains_key(path) {
             return Err(format!("session {path} already exists"));
         }
@@ -75,6 +84,7 @@ impl SessionRegistry {
             path.to_string(),
             CastSession {
                 app_id: app_id.to_string(),
+                owner,
                 sources_selected: false,
                 source: CastSource::Monitor { output: None },
                 cursor_mode: 1,
@@ -190,6 +200,24 @@ impl SessionRegistry {
     pub(crate) fn remove(&mut self, path: &str) -> Option<CastSession> {
         self.sessions.remove(path)
     }
+
+    /// Detach every session created by `owner`, returning their paths.
+    ///
+    /// The caller tears each one down after dropping the registry lock, so a
+    /// client that disappears cannot hold a compositor capture open for the
+    /// rest of the session.
+    pub(crate) fn remove_owned_by(&mut self, owner: &str) -> Vec<String> {
+        let paths: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.owner.as_deref() == Some(owner))
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in &paths {
+            self.sessions.remove(path);
+        }
+        paths
+    }
 }
 
 /// Stop and join a detached cast without holding the session-registry lock.
@@ -204,24 +232,115 @@ pub(crate) fn stop_cast(mut session: CastSession) {
 /// `Closed` signal; the worker emits the signal after teardown so the
 /// frontend observes a fully stopped session.
 pub(crate) struct SessionIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     pub(crate) path: String,
     pub(crate) jobs: std::sync::mpsc::SyncSender<crate::screencast::CastJob>,
 }
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.Session")]
 impl SessionIface {
-    async fn close(&self) -> zbus::fdo::Result<()> {
+    async fn close(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+    ) -> zbus::fdo::Result<()> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         log::info!("portal: session {} closed by client", self.path);
-        self.jobs
-            .send(crate::screencast::CastJob::CloseSession {
-                session_path: self.path.clone(),
-            })
-            .map_err(|_| zbus::fdo::Error::Failed("screencast worker is gone".to_string()))
+        // `try_send`, never `send`: zbus 6 runs this method as a task on the
+        // connection's own runtime, so a blocking send on a full queue would
+        // stall every interface sharing the connection until the screencast
+        // worker drained a job.
+        //
+        // Teardown also cannot be dropped, so a full queue is handed to a
+        // single dedicated pump instead of being refused: `Close` answers
+        // immediately and the session is torn down as soon as there is room.
+        let job = crate::screencast::CastJob::CloseSession {
+            session_path: self.path.clone(),
+        };
+        match self.jobs.try_send(job) {
+            Ok(()) => Ok(()),
+            Err(std::sync::mpsc::TrySendError::Full(job)) => {
+                log::warn!(
+                    "portal: screencast queue is full; deferring the close of {}",
+                    self.path
+                );
+                defer_close(self.jobs.clone(), job);
+                Ok(())
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                log::error!(
+                    "portal: screencast worker is gone; cannot close {}",
+                    self.path
+                );
+                Err(zbus::fdo::Error::Failed(
+                    "screencast worker is gone".to_string(),
+                ))
+            }
+        }
     }
 
     #[zbus(property)]
     fn version(&self) -> u32 {
         1
+    }
+}
+
+/// Hand a `CloseSession` job to the shared deferred-close pump.
+///
+/// One process-wide thread blocks on the screencast queue's `send` on behalf of
+/// every caller that found the queue full. Being a single thread, a burst of
+/// closes cannot grow the process by a thread per call. The pump's own queue is
+/// bounded and produced non-blockingly: it runs on the connection's runtime, so
+/// a blocking send there would reintroduce the stall it exists to avoid.
+fn defer_close(
+    jobs: std::sync::mpsc::SyncSender<crate::screencast::CastJob>,
+    job: crate::screencast::CastJob,
+) {
+    use std::sync::OnceLock;
+
+    const PUMP_DEPTH: usize = 64;
+
+    static PUMP: OnceLock<Option<std::sync::mpsc::SyncSender<crate::screencast::CastJob>>> =
+        OnceLock::new();
+    let pump = PUMP.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<crate::screencast::CastJob>(PUMP_DEPTH);
+        let spawned = std::thread::Builder::new()
+            .name("atrium-portal-close-pump".to_owned())
+            .spawn(move || {
+                while let Ok(job) = rx.recv() {
+                    if jobs.send(job).is_err() {
+                        log::error!(
+                            "portal: screencast worker vanished with deferred closes pending"
+                        );
+                        return;
+                    }
+                }
+            });
+        match spawned {
+            Ok(_) => Some(tx),
+            Err(error) => {
+                log::error!("portal: could not start the deferred-close pump: {error}");
+                None
+            }
+        }
+    });
+    match pump {
+        Some(pump) => match pump.try_send(job) {
+            Ok(()) => {}
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                log::error!("portal: deferred-close pump is full; a session close was lost");
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                log::error!("portal: the deferred-close pump stopped; a session close was lost");
+            }
+        },
+        None => log::error!("portal: no deferred-close pump; a session close was lost"),
     }
 }
 
@@ -231,7 +350,7 @@ mod tests {
 
     fn registry_with(path: &str) -> SessionRegistry {
         let mut registry = SessionRegistry::default();
-        registry.insert(path, "org.example.App").unwrap();
+        registry.insert(path, "org.example.App", None).unwrap();
         registry
     }
 
@@ -243,8 +362,8 @@ mod tests {
     fn duplicate_session_paths_are_refused() {
         let mut registry = registry_with("/s/1");
         assert!(registry.contains("/s/1"));
-        assert!(registry.insert("/s/1", "org.example.App").is_err());
-        assert!(registry.insert("/s/2", "org.example.App").is_ok());
+        assert!(registry.insert("/s/1", "org.example.App", None).is_err());
+        assert!(registry.insert("/s/2", "org.example.App", None).is_ok());
     }
 
     #[test]
@@ -252,10 +371,14 @@ mod tests {
         let mut registry = SessionRegistry::default();
         for index in 0..MAX_SESSIONS {
             registry
-                .insert(&format!("/s/{index}"), "org.example.App")
+                .insert(&format!("/s/{index}"), "org.example.App", None)
                 .unwrap();
         }
-        assert!(registry.insert("/s/overflow", "org.example.App").is_err());
+        assert!(
+            registry
+                .insert("/s/overflow", "org.example.App", None)
+                .is_err()
+        );
     }
 
     #[test]
@@ -263,7 +386,7 @@ mod tests {
         let mut registry = SessionRegistry::default();
         for index in 0..=MAX_LIVE_CASTS {
             let path = format!("/s/{index}");
-            registry.insert(&path, "org.example.App").unwrap();
+            registry.insert(&path, "org.example.App", None).unwrap();
             registry
                 .mark_sources_selected(&path, "org.example.App", desktop(), 1, 0, None)
                 .unwrap();
@@ -283,7 +406,7 @@ mod tests {
     #[test]
     fn host_applications_with_an_empty_frontend_app_id_are_supported() {
         let mut registry = SessionRegistry::default();
-        registry.insert("/s/host", "").unwrap();
+        registry.insert("/s/host", "", None).unwrap();
         registry
             .mark_sources_selected("/s/host", "", desktop(), 1, 0, None)
             .unwrap();

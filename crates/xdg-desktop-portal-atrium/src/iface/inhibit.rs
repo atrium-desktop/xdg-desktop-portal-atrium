@@ -35,7 +35,10 @@
 //! without a system bus.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use zbus::{ObjectPath, OwnedFd, Variant};
 
@@ -54,11 +57,31 @@ const MAX_REASON_BYTES: usize = 16 * 1024;
 
 const INHIBIT_IFACE: &str = "org.freedesktop.impl.portal.Inhibit";
 
-/// The logind client seam (see the module docs).
+/// A boxed inhibition future, kept dynamic because the seam is used as `dyn`
+/// behind the interface object.
+/// How long the logind inhibit call may take before it is abandoned.
+///
+/// A wedged logind (a real shutdown-time failure mode) would otherwise leave
+/// the `Inhibit` method task hanging on the connection's runtime indefinitely,
+/// holding its exported request object open. This bounds the wait to a
+/// reasonable D-Bus round trip and turns the hang into a truthful error.
+const LOGIND_CALL_TIMEOUT: Duration = Duration::from_secs(10);
+
+type InhibitFuture<'a> = Pin<Box<dyn Future<Output = Result<OwnedFd, String>> + Send + 'a>>;
+
+/// The logind client seam. Async so the served method can await the logind
+/// round trip instead of blocking the connection's runtime (see the module
+/// docs).
 pub(crate) trait SystemInhibitor: Send + Sync {
     /// Take an inhibition lock; the returned descriptor inhibits while
     /// held and releases on close.
-    fn inhibit(&self, what: &str, who: &str, why: &str, mode: &str) -> Result<OwnedFd, String>;
+    fn inhibit<'a>(
+        &'a self,
+        what: &'a str,
+        who: &'a str,
+        why: &'a str,
+        mode: &'a str,
+    ) -> InhibitFuture<'a>;
 }
 
 /// The production inhibitor: `org.freedesktop.login1.Manager.Inhibit` on
@@ -74,49 +97,79 @@ impl Logind {
             conn: Mutex::new(None),
         }
     }
+
+    /// The cached system-bus connection, established on first use.
+    async fn connection(&self) -> zbus::Result<zbus::Connection> {
+        // The lock is taken only to read or store the connection and never held
+        // across the await: `MutexGuard` is not `Send`, so holding it would keep
+        // this future off the connection's runtime.
+        if let Some(conn) = sync::lock(&self.conn, "logind connection").clone() {
+            return Ok(conn);
+        }
+        // Bound every method call on this connection: logind can wed (especially
+        // during machine shutdown), and without a timeout this method task
+        // would hang forever on the connection runtime while holding its
+        // exported request object open.
+        let conn = zbus::connection::Builder::system()
+            .method_timeout(LOGIND_CALL_TIMEOUT)
+            .build()
+            .await?;
+        *sync::lock(&self.conn, "logind connection") = Some(conn.clone());
+        Ok(conn)
+    }
 }
 
 impl SystemInhibitor for Logind {
-    fn inhibit(&self, what: &str, who: &str, why: &str, mode: &str) -> Result<OwnedFd, String> {
-        let mut guard = sync::lock(&self.conn, "logind connection");
-        if guard.is_none() {
-            let conn = atrium_portal_request::block_on(zbus::Connection::system())
+    fn inhibit<'a>(
+        &'a self,
+        what: &'a str,
+        who: &'a str,
+        why: &'a str,
+        mode: &'a str,
+    ) -> InhibitFuture<'a> {
+        Box::pin(async move {
+            let conn = self
+                .connection()
+                .await
                 .map_err(|error| format!("system bus unavailable: {error}"))?;
-            *guard = Some(conn);
-        }
-        // Invariant, not a fallible step: the branch above stored the
-        // connection, and the lock is still held.
-        let conn = guard
-            .as_ref()
-            .expect("logind connection stored under the same lock");
-        let reply = atrium_portal_request::block_on(conn.call_method(
-            Some("org.freedesktop.login1"),
-            "/org/freedesktop/login1",
-            Some("org.freedesktop.login1.Manager"),
-            "Inhibit",
-            &(what, who, why, mode),
-        ));
-        match reply {
-            Ok(reply) => reply
-                .body()
-                .deserialize::<OwnedFd>()
-                .map_err(|error| format!("logind returned a malformed lock: {error}")),
-            Err(error) => {
-                // Drop the cached connection so the next call reconnects.
-                *guard = None;
-                Err(format!("logind Inhibit({what}) failed: {error}"))
+            match conn
+                .call_method(
+                    Some("org.freedesktop.login1"),
+                    "/org/freedesktop/login1",
+                    Some("org.freedesktop.login1.Manager"),
+                    "Inhibit",
+                    &(what, who, why, mode),
+                )
+                .await
+            {
+                Ok(reply) => reply
+                    .body()
+                    .deserialize::<OwnedFd>()
+                    .map_err(|error| format!("logind returned a malformed lock: {error}")),
+                Err(error) => {
+                    // Drop the cached connection so the next call reconnects.
+                    *sync::lock(&self.conn, "logind connection") = None;
+                    Err(format!("logind Inhibit({what}) failed: {error}"))
+                }
             }
-        }
+        })
     }
 }
 
 /// One accepted Inhibit call's bookkeeping.
 struct InhibitRecord {
     app_id: String,
+    /// The D-Bus unique name of the caller, so a dead client's logind lock can
+    /// be released instead of inhibiting the session until the portal exits.
+    owner: Option<String>,
     flags: u32,
     /// The held logind lock; `None` for logout/user-switch-only requests
     /// (the tracked no-op).
     lock: Option<OwnedFd>,
+    /// Whether the logind lock has been attached. False while the logind call
+    /// is in flight, so a `Close` in that window can mark the request cancelled
+    /// rather than releasing a lock that does not exist yet.
+    active: bool,
 }
 
 /// Live inhibit requests keyed by their Request object path, plus the
@@ -125,6 +178,9 @@ struct InhibitRecord {
 pub(crate) struct InhibitRegistry {
     requests: HashMap<String, InhibitRecord>,
     monitors: HashSet<String>,
+    /// Request paths closed after the object was exported but before the
+    /// inhibition was stored. Bounded by `MAX_INHIBIT_OBJECTS`.
+    early_closes: HashSet<String>,
 }
 
 impl InhibitRegistry {
@@ -132,12 +188,14 @@ impl InhibitRegistry {
         self.requests.len() + self.monitors.len()
     }
 
-    fn add_request(
+    /// Reserve a slot before any external work, so the cap bounds the logind
+    /// descriptors taken rather than only those kept.
+    fn reserve_request(
         &mut self,
         path: &str,
         app_id: &str,
+        owner: Option<String>,
         flags: u32,
-        lock: Option<OwnedFd>,
     ) -> Result<(), String> {
         if self.requests.contains_key(path) || self.monitors.contains(path) {
             return Err(format!("inhibit object {path} is already active"));
@@ -149,15 +207,77 @@ impl InhibitRegistry {
             path.to_string(),
             InhibitRecord {
                 app_id: app_id.to_string(),
+                owner,
                 flags,
-                lock,
+                lock: None,
+                active: false,
             },
         );
         Ok(())
     }
 
+    /// Attach the logind descriptor and report whether the caller had already
+    /// closed the request. One lock acquisition, so no interleaving can leave a
+    /// stored inhibition with a marker still pending.
+    fn attach_lock(&mut self, path: &str, lock: Option<OwnedFd>) -> bool {
+        let closed_early = self.early_closes.remove(path);
+        if closed_early {
+            drop(lock);
+            self.requests.remove(path);
+            return true;
+        }
+        match self.requests.get_mut(path) {
+            Some(record) => {
+                record.lock = lock;
+                record.active = true;
+                false
+            }
+            None => {
+                drop(lock);
+                true
+            }
+        }
+    }
+
+    /// Record that `path` was closed before its inhibition was stored.
+    fn note_early_close(&mut self, path: &str) {
+        if self.early_closes.len() >= MAX_INHIBIT_OBJECTS
+            && let Some(oldest) = self.early_closes.iter().next().cloned()
+        {
+            self.early_closes.remove(&oldest);
+        }
+        self.early_closes.insert(path.to_string());
+    }
+
+    /// Release every inhibition taken by `owner`, returning how many were
+    /// released. Dropping each record closes its logind descriptor.
+    pub(crate) fn release_owned_by(&mut self, owner: &str) -> usize {
+        let paths: Vec<String> = self
+            .requests
+            .iter()
+            .filter(|(_, record)| record.owner.as_deref() == Some(owner))
+            .map(|(path, _)| path.clone())
+            .collect();
+        let released = paths.len();
+        for path in paths {
+            self.requests.remove(&path);
+            self.early_closes.remove(&path);
+        }
+        released
+    }
+
+    /// Forget all state for `path`.
+    fn forget(&mut self, path: &str) {
+        self.requests.remove(path);
+        self.early_closes.remove(path);
+    }
+
     fn remove_request(&mut self, path: &str) -> Option<InhibitRecord> {
-        self.requests.remove(path)
+        let record = self.requests.remove(path)?;
+        if !record.active {
+            self.note_early_close(path);
+        }
+        Some(record)
     }
 
     fn add_monitor(&mut self, path: &str) -> Result<(), String> {
@@ -193,21 +313,41 @@ fn logind_what(flags: u32) -> String {
     }
     what.join(":")
 }
-
-/// Validate and take the inhibition: the logind lock first (so a failure
-/// leaves no bookkeeping behind), then the registry record. A registry
-/// refusal drops the just-taken lock, releasing it immediately.
-fn apply_inhibit(
+/// Validate, reserve a registry slot, and take the inhibition.
+///
+/// The **reservation comes first**, before the logind call, on purpose: the cap
+/// exists to bound how many logind inhibit descriptors this process can hold at
+/// once, and checking it after the call would let N concurrent callers each take
+/// a descriptor before learning that only `MAX_INHIBIT_OBJECTS` may be kept.
+///
+/// The registry lock is held only for the check-and-insert, never across the
+/// await, so it cannot serialize the logind round trips nor keep a non-`Send`
+/// guard inside this future.
+async fn apply_inhibit(
     inhibitor: &dyn SystemInhibitor,
-    registry: &mut InhibitRegistry,
+    registry: &Mutex<InhibitRegistry>,
     path: &str,
     app_id: &str,
+    owner: Option<String>,
     flags: u32,
     reason: Option<String>,
 ) -> Result<(), String> {
     if flags == 0 || flags & !KNOWN_FLAGS != 0 {
         return Err(format!("unsupported or empty inhibit flags {flags:#x}"));
     }
+
+    // A `Close` that raced ahead of this call is honoured before any logind
+    // work: nothing was stored yet, so the marker is all there is.
+    if sync::lock(registry, "inhibit registry")
+        .early_closes
+        .remove(path)
+    {
+        return Err(format!(
+            "request {path} was closed before the inhibition began"
+        ));
+    }
+    sync::lock(registry, "inhibit registry").reserve_request(path, app_id, owner, flags)?;
+
     let what = logind_what(flags);
     let lock = if what.is_empty() {
         None
@@ -221,9 +361,26 @@ fn apply_inhibit(
             .as_deref()
             .filter(|reason| !reason.is_empty())
             .unwrap_or("Portal inhibition request");
-        Some(inhibitor.inhibit(&what, who, why, "block")?)
+        match inhibitor.inhibit(&what, who, why, "block").await {
+            Ok(lock) => Some(lock),
+            Err(error) => {
+                // Give the reservation back: a refused inhibition must leave no
+                // bookkeeping and hold no slot.
+                sync::lock(registry, "inhibit registry").forget(path);
+                return Err(error);
+            }
+        }
     };
-    registry.add_request(path, app_id, flags, lock)
+
+    // Store the descriptor and settle a `Close` that arrived while logind was
+    // answering, under one lock acquisition.
+    if sync::lock(registry, "inhibit registry").attach_lock(path, lock) {
+        sync::lock(registry, "inhibit registry").forget(path);
+        return Err(format!(
+            "request {path} was closed before the inhibition completed"
+        ));
+    }
+    Ok(())
 }
 
 /// The `reason` option, bounded and NUL-free.
@@ -242,6 +399,9 @@ fn parse_reason(options: &HashMap<String, Variant<'_>>) -> Result<Option<String>
 /// The served inhibit interface. No worker: the logind call happens in the
 /// method, so failures surface as D-Bus errors (see the module docs).
 pub(crate) struct InhibitIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     pub(crate) conn: zbus::Connection,
     pub(crate) tracker: Arc<Mutex<RequestTracker>>,
     pub(crate) registry: Arc<Mutex<InhibitRegistry>>,
@@ -249,11 +409,19 @@ pub(crate) struct InhibitIface {
 }
 
 impl InhibitIface {
-    pub(crate) fn new(conn: zbus::Connection, tracker: Arc<Mutex<RequestTracker>>) -> Self {
+    /// `registry` is shared with the bus-name GC, which releases the logind
+    /// locks of a client that leaves the bus; `callers` is the admission guard.
+    pub(crate) fn new(
+        conn: zbus::Connection,
+        tracker: Arc<Mutex<RequestTracker>>,
+        registry: Arc<Mutex<InhibitRegistry>>,
+        callers: Arc<atrium_portal_request::CallerGuard>,
+    ) -> Self {
         Self {
             conn,
             tracker,
-            registry: Arc::new(Mutex::new(InhibitRegistry::default())),
+            registry,
+            callers,
             inhibitor: Arc::new(Logind::new()),
         }
     }
@@ -268,22 +436,46 @@ impl InhibitIface {
         _window: &str,
         flags: u32,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<()> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let path = handle.as_str().to_string();
         log::info!("portal: Inhibit for '{app_id}' at {path} (flags {flags:#x})");
 
         let reason = parse_reason(&options).map_err(zbus::fdo::Error::InvalidArgs)?;
+        let owner: Option<String> = header.sender().map(|sender| sender.as_str().to_string());
+        if let Err(error) = apply_inhibit(
+            self.inhibitor.as_ref(),
+            &self.registry,
+            &path,
+            app_id,
+            owner,
+            flags,
+            reason,
+        )
+        .await
         {
-            let mut registry = sync::lock(&self.registry, "inhibit registry");
-            apply_inhibit(
-                self.inhibitor.as_ref(),
-                &mut registry,
-                &path,
-                app_id,
-                flags,
-                reason,
-            )
-            .map_err(zbus::fdo::Error::Failed)?;
+            // Nothing is stored on any failure path, so the object serves
+            // nothing: remove it rather than leave a `Close` that releases
+            // nothing.
+            sync::lock(&self.registry, "inhibit registry").forget(&path);
+            if let Err(remove_error) = self
+                .conn
+                .object_server()
+                .remove::<InhibitRequestIface, _>(path.as_str())
+                .await
+            {
+                log::warn!(
+                    "portal: could not remove refused inhibit request {path}: {remove_error}"
+                );
+            }
+            return Err(zbus::fdo::Error::Failed(error));
         }
         let inserted = self
             .conn
@@ -294,6 +486,7 @@ impl InhibitIface {
                     path: path.clone(),
                     conn: self.conn.clone(),
                     registry: Arc::clone(&self.registry),
+                    callers: Arc::clone(&self.callers),
                 },
             )
             .await
@@ -318,7 +511,15 @@ impl InhibitIface {
         session_handle: ObjectPath<'_>,
         app_id: &str,
         _window: &str,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<u32> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let path = handle.as_str().to_string();
         let session_path = session_handle.as_str().to_string();
         log::info!("portal: CreateMonitor for '{app_id}' at {session_path}");
@@ -331,7 +532,17 @@ impl InhibitIface {
 
     /// No session manager means no Query End ever arrives; acknowledge the
     /// call for live monitor sessions and reject unknown ones.
-    async fn query_end_response(&self, session_handle: ObjectPath<'_>) -> zbus::fdo::Result<()> {
+    async fn query_end_response(
+        &self,
+        session_handle: ObjectPath<'_>,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+    ) -> zbus::fdo::Result<()> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let path = session_handle.as_str();
         if sync::lock(&self.registry, "inhibit registry").is_monitor(path) {
             log::debug!("portal: QueryEndResponse for {path} acknowledged (no-op)");
@@ -365,10 +576,20 @@ impl InhibitIface {
                     path: session_path.to_owned(),
                     conn: self.conn.clone(),
                     registry: Arc::clone(&self.registry),
+                    callers: Arc::clone(&self.callers),
                 },
             )
-            .await
-            .map_err(zbus::fdo::Error::from)?;
+            .await;
+        let inserted = match inserted {
+            Ok(inserted) => inserted,
+            Err(error) => {
+                // Release the reserved slot: an export failure must not leave a
+                // phantom monitor consuming the cap and answering
+                // `QueryEndResponse` for a session that does not exist.
+                sync::lock(&self.registry, "inhibit registry").remove_monitor(session_path);
+                return Err(zbus::fdo::Error::from(error));
+            }
+        };
         if inserted.is_some() {
             sync::lock(&self.registry, "inhibit registry").remove_monitor(session_path);
             return Ok(2);
@@ -398,6 +619,9 @@ impl InhibitIface {
 /// The Request object owned by one accepted Inhibit call. `Close` releases
 /// the inhibition (dropping the logind lock) and removes the object.
 struct InhibitRequestIface {
+    /// Admission: only the portal frontend may call a private backend.
+    callers: Arc<atrium_portal_request::CallerGuard>,
+
     path: String,
     conn: zbus::Connection,
     registry: Arc<Mutex<InhibitRegistry>>,
@@ -405,9 +629,26 @@ struct InhibitRequestIface {
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.Request")]
 impl InhibitRequestIface {
-    async fn close(&self) -> zbus::fdo::Result<()> {
+    async fn close(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+    ) -> zbus::fdo::Result<()> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let released = sync::lock(&self.registry, "inhibit registry").remove_request(&self.path);
-        if let Some(record) = released {
+        if released.is_none() {
+            // Either the request is already gone, or `Inhibit` is still in
+            // flight. Marking the close lets that call release the inhibition it
+            // is about to store instead of leaking it.
+            sync::lock(&self.registry, "inhibit registry").note_early_close(&self.path);
+        }
+        if let Some(record) = released
+            && record.active
+        {
             log::info!(
                 "portal: released inhibition of '{}' at {} (flags {:#x}, logind lock: {})",
                 record.app_id,
@@ -436,6 +677,9 @@ impl InhibitRequestIface {
 /// The monitor Session object. There is no teardown beyond unregistration:
 /// monitors hold no resources.
 struct InhibitSessionIface {
+    /// Admission: only the portal frontend may call a private backend.
+    callers: Arc<atrium_portal_request::CallerGuard>,
+
     path: String,
     conn: zbus::Connection,
     registry: Arc<Mutex<InhibitRegistry>>,
@@ -443,7 +687,16 @@ struct InhibitSessionIface {
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.Session")]
 impl InhibitSessionIface {
-    async fn close(&self) -> zbus::fdo::Result<()> {
+    async fn close(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+    ) -> zbus::fdo::Result<()> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         log::info!("portal: monitor session {} closed by client", self.path);
         sync::lock(&self.registry, "inhibit registry").remove_monitor(&self.path);
         if let Err(error) = self
@@ -477,20 +730,43 @@ mod tests {
     }
 
     impl SystemInhibitor for FakeInhibitor {
-        fn inhibit(&self, what: &str, who: &str, why: &str, mode: &str) -> Result<OwnedFd, String> {
+        fn inhibit<'a>(
+            &'a self,
+            what: &'a str,
+            who: &'a str,
+            why: &'a str,
+            mode: &'a str,
+        ) -> InhibitFuture<'a> {
             self.calls.lock().unwrap().push((
                 what.to_owned(),
                 who.to_owned(),
                 why.to_owned(),
                 mode.to_owned(),
             ));
-            if self.fail {
-                return Err("fake logind failure".to_owned());
-            }
-            // A real descriptor, standing in for logind's lock.
-            let fd = std::fs::File::open("/dev/null").unwrap();
-            Ok(std::os::fd::OwnedFd::from(fd).into())
+            let failure = self.fail;
+            Box::pin(async move {
+                if failure {
+                    return Err("fake logind failure".to_owned());
+                }
+                // A real descriptor, standing in for logind's lock.
+                let fd = std::fs::File::open("/dev/null").unwrap();
+                Ok(std::os::fd::OwnedFd::from(fd).into())
+            })
         }
+    }
+
+    /// Drive one `apply_inhibit` future to completion.
+    fn apply(
+        inhibitor: &dyn SystemInhibitor,
+        registry: &Mutex<InhibitRegistry>,
+        path: &str,
+        app_id: &str,
+        flags: u32,
+        reason: Option<String>,
+    ) -> Result<(), String> {
+        atrium_portal_request::block_on(apply_inhibit(
+            inhibitor, registry, path, app_id, None, flags, reason,
+        ))
     }
 
     fn fake(fail: bool) -> FakeInhibitor {
@@ -513,19 +789,23 @@ mod tests {
     #[test]
     fn flag_validation_rejects_zero_and_unknown_bits() {
         let inhibitor = fake(false);
-        let mut registry = InhibitRegistry::default();
-        assert!(apply_inhibit(&inhibitor, &mut registry, "/r/0", "app", 0, None).is_err());
-        assert!(apply_inhibit(&inhibitor, &mut registry, "/r/x", "app", 0x10, None).is_err());
-        assert!(registry.requests.is_empty());
+        let registry = Mutex::new(InhibitRegistry::default());
+        assert!(apply(&inhibitor, &registry, "/r/0", "app", 0, None).is_err());
+        assert!(apply(&inhibitor, &registry, "/r/x", "app", 0x10, None).is_err());
+        assert!(
+            sync::lock(&registry, "inhibit registry")
+                .requests
+                .is_empty()
+        );
     }
 
     #[test]
     fn tracked_no_op_makes_no_logind_call() {
         let inhibitor = fake(false);
-        let mut registry = InhibitRegistry::default();
-        apply_inhibit(
+        let registry = Mutex::new(InhibitRegistry::default());
+        apply(
             &inhibitor,
-            &mut registry,
+            &registry,
             "/r/1",
             "org.example.App",
             INHIBIT_LOGOUT | INHIBIT_USER_SWITCH,
@@ -533,7 +813,9 @@ mod tests {
         )
         .unwrap();
         assert!(inhibitor.calls.lock().unwrap().is_empty());
-        let record = registry.remove_request("/r/1").unwrap();
+        let record = sync::lock(&registry, "inhibit registry")
+            .remove_request("/r/1")
+            .unwrap();
         assert!(record.lock.is_none());
         assert_eq!(record.flags, INHIBIT_LOGOUT | INHIBIT_USER_SWITCH);
     }
@@ -541,10 +823,10 @@ mod tests {
     #[test]
     fn logind_call_carries_who_why_and_block_mode() {
         let inhibitor = fake(false);
-        let mut registry = InhibitRegistry::default();
-        apply_inhibit(
+        let registry = Mutex::new(InhibitRegistry::default());
+        apply(
             &inhibitor,
-            &mut registry,
+            &registry,
             "/r/1",
             "org.example.Player",
             INHIBIT_IDLE | INHIBIT_SUSPEND,
@@ -562,28 +844,37 @@ mod tests {
             )]
         );
         drop(calls);
-        assert!(registry.remove_request("/r/1").unwrap().lock.is_some());
+        assert!(
+            sync::lock(&registry, "inhibit registry")
+                .remove_request("/r/1")
+                .unwrap()
+                .lock
+                .is_some()
+        );
     }
 
     #[test]
     fn logind_failure_leaves_no_bookkeeping() {
         let inhibitor = fake(true);
-        let mut registry = InhibitRegistry::default();
+        let registry = Mutex::new(InhibitRegistry::default());
+        assert!(apply(&inhibitor, &registry, "/r/1", "app", INHIBIT_IDLE, None).is_err());
         assert!(
-            apply_inhibit(&inhibitor, &mut registry, "/r/1", "app", INHIBIT_IDLE, None).is_err()
+            sync::lock(&registry, "inhibit registry")
+                .requests
+                .is_empty()
         );
-        assert!(registry.requests.is_empty());
     }
 
     #[test]
     fn registry_caps_and_deduplicates_objects() {
+        // The registry type itself, without the `Mutex` the server wraps it in.
         let mut registry = InhibitRegistry::default();
         registry
-            .add_request("/r/dup", "app", INHIBIT_IDLE, None)
+            .reserve_request("/r/dup", "app", None, INHIBIT_IDLE)
             .unwrap();
         assert!(
             registry
-                .add_request("/r/dup", "app", INHIBIT_IDLE, None)
+                .reserve_request("/r/dup", "app", None, INHIBIT_IDLE)
                 .is_err()
         );
         // A monitor path collides with a request path too.
@@ -596,15 +887,24 @@ mod tests {
         registry.remove_request("/r/dup");
         for index in 0..MAX_INHIBIT_OBJECTS {
             registry
-                .add_request(&format!("/r/{index}"), "app", INHIBIT_IDLE, None)
+                .reserve_request(&format!("/r/{index}"), "app", None, INHIBIT_IDLE)
                 .unwrap();
         }
         assert!(
             registry
-                .add_request("/r/overflow", "app", INHIBIT_IDLE, None)
+                .reserve_request("/r/overflow", "app", None, INHIBIT_IDLE)
                 .is_err()
         );
         assert!(registry.add_monitor("/m/overflow").is_err());
+    }
+
+    #[test]
+    fn logind_connection_configures_method_timeout() {
+        let logind = Logind::new();
+        // Only run if system bus is available
+        if let Ok(conn) = atrium_portal_request::block_on(logind.connection()) {
+            assert_eq!(conn.method_timeout(), Some(LOGIND_CALL_TIMEOUT));
+        }
     }
 
     #[test]

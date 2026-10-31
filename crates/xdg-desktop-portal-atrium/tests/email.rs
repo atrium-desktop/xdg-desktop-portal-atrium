@@ -83,6 +83,8 @@ fn compose_email_hands_off_to_the_mailer() {
     let _daemon = KillOnDrop(cmd.spawn().expect("spawn xdg-desktop-portal-atrium"));
 
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
     let email = bus::proxy(&conn, PORTAL, DESKTOP_PATH, IFACE);
 
     // The public portal turns attachment fds into local file URIs before it
@@ -232,6 +234,8 @@ fn public_frontend_translates_attachment_fds_for_the_backend() {
         ));
     let _backend = KillOnDrop(backend.spawn().expect("spawn Tessera backend"));
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     let frontend_log = root.join("frontend.log");
     let mut frontend_command = Command::new(frontend);

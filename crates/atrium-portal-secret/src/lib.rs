@@ -12,7 +12,7 @@ pub mod portal;
 
 use std::sync::{Arc, Mutex};
 
-use atrium_portal_request::RequestTracker;
+use atrium_portal_request::{RequestTracker, Supervisor};
 
 /// Errors occurring in the portal secret adapter.
 #[derive(Debug, thiserror::Error)]
@@ -22,20 +22,37 @@ pub enum SecretError {
 }
 
 /// The Secret service adapter instance registered with the portal runtime.
-#[derive(Clone, Default)]
-pub struct SecretService;
+///
+/// Owns the supervised worker queue the served interface dispatches onto
+/// (see `portal` for why the retrieval cannot run in the served method).
+pub struct SecretService {
+    supervisor: Supervisor<portal::SecretJob>,
+    jobs: std::sync::mpsc::SyncSender<portal::SecretJob>,
+    callers: Arc<atrium_portal_request::CallerGuard>,
+}
 
 impl SecretService {
-    pub fn new() -> Self {
-        Self
+    /// `callers` is the shared admission guard: only the portal frontend may
+    /// reach this private backend (see `atrium_portal_request::caller`).
+    pub fn new(callers: Arc<atrium_portal_request::CallerGuard>) -> Self {
+        let supervisor = Supervisor::new("secret");
+        let jobs = supervisor.sender();
+        Self {
+            supervisor,
+            jobs,
+            callers,
+        }
     }
 
-    /// Export the Secret interface at `path`.
+    /// Export the Secret interface at `path` and start its worker.
     ///
     /// Takes the async `zbus::Connection` (zbus 6 has no blocking one) and an
     /// [`atrium_portal_request::Driver`] to install the object on the thread
     /// that drives that connection: the caller is a synchronous assembly path
     /// and must not drive the connection itself.
+    ///
+    /// The worker is spawned through `spawn_worker` so the assembly code keeps
+    /// one accounting of the threads this process runs.
     pub fn register_portal(
         &self,
         driver: &atrium_portal_request::Driver,
@@ -45,7 +62,9 @@ impl SecretService {
     ) -> Result<(), SecretError> {
         let iface = portal::SecretIface {
             conn: conn.clone(),
-            tracker,
+            tracker: tracker.clone(),
+            jobs: self.jobs.clone(),
+            callers: Arc::clone(&self.callers),
         };
         driver
             .call(move |conn| {
@@ -55,5 +74,14 @@ impl SecretService {
             })
             .map_err(|e| SecretError::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
+    }
+
+    /// Run the worker loop. Blocking; call it on a dedicated thread via
+    /// `spawn_worker`.
+    ///
+    /// Consumes the supervisor, so this can only be called once.
+    pub fn serve(self, tracker: Arc<Mutex<RequestTracker>>) {
+        self.supervisor
+            .serve(|rx| portal::secret_worker(rx, Arc::clone(&tracker)));
     }
 }

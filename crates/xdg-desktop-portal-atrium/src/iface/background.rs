@@ -61,6 +61,9 @@ pub(crate) enum BackgroundJob {
 /// the request object, and enqueues; the consent dialog and the autostart
 /// write happen on the worker.
 pub(crate) struct BackgroundIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     pub(crate) conn: zbus::Connection,
     pub(crate) tracker: Arc<Mutex<RequestTracker>>,
     pub(crate) jobs: mpsc::SyncSender<BackgroundJob>,
@@ -75,7 +78,15 @@ impl BackgroundIface {
         parent_window: &str,
         reason: &str,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let path = handle.as_str().to_string();
         log::info!("portal: RequestBackground for '{app_id}' at {path}");
 
@@ -251,17 +262,35 @@ fn write_autostart_entry(
     app_id: &str,
     spec: &AutostartSpec,
 ) -> std::io::Result<PathBuf> {
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
     let path = autostart_entry_path(config_dir, app_id);
     // `autostart_entry_path` always appends `autostart/<id>.desktop`, so the
     // parent exists by construction. Deriving it from the same expression the
     // path builder used keeps that true without an `expect` in a request path.
     let directory = config_dir.join("autostart");
     std::fs::create_dir_all(&directory)?;
-    let temporary = directory.join(format!(".{app_id}.desktop.atrium-{}", std::process::id()));
-    std::fs::write(&temporary, render_desktop_entry(app_id, spec))?;
-    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o644))?;
-    std::fs::rename(&temporary, &path)?;
+    let suffix = rand::random::<u64>();
+    let temporary = directory.join(format!(".{app_id}.desktop.atrium-{suffix:016x}.tmp"));
+    let content = render_desktop_entry(app_id, spec);
+    let result = (|| {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(&temporary)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+        // fchmod explicitly sets 0o644, which open's mode alone cannot guarantee
+        // when the process runs under a strict umask (e.g. 0077).
+        file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
+        std::fs::rename(&temporary, &path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result?;
     Ok(path)
 }
 
@@ -540,6 +569,13 @@ mod tests {
         let second = std::fs::read_to_string(&path).unwrap();
         assert!(second.contains("Exec=foo --baz\n"));
         assert!(second.contains("DBusActivatable=true\n"));
+
+        // No temporary files linger after an atomic replace.
+        let entries: Vec<_> = std::fs::read_dir(root.join("autostart"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, ["org.foo.Bar.desktop"]);
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -91,6 +91,8 @@ fn start(
             .expect("spawn the portal daemon"),
     );
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
     Some((conn, fake, server, daemon, bus))
 }
 

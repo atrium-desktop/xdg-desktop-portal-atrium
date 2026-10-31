@@ -67,6 +67,8 @@ fn an_interface_keeps_answering_across_repeated_requests() {
             .expect("spawn portal daemon"),
     );
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     // Twenty sequential requests: the worker must survive all of them. The
     // compositor socket is absent, so each answers the failure code rather

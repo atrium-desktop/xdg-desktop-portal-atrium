@@ -156,6 +156,8 @@ fn file_chooser_end_to_end() {
     let _daemon = KillOnDrop(command.spawn().expect("spawn portal daemon"));
 
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
     let chooser_proxy = chooser(&conn);
     // OpenFile exercises every v3 option whose old compositor picker lost.
     let filters = vec![(
@@ -264,11 +266,14 @@ fn file_chooser_end_to_end() {
 
     // Request.Close is an active cancellation boundary, and a prompter that
     // stays alive must not serialize unrelated clients behind it.
-    let bus_address = bus.address().to_owned();
     let started = std::time::Instant::now();
+    // The frontend is a single D-Bus peer that multiplexes every application's
+    // requests over one connection, so a second concurrent request shares this
+    // connection rather than opening its own (a separate peer would not be
+    // admitted to a private backend).
+    let pending_conn = conn.clone();
     let pending = std::thread::spawn(move || {
-        let connection = bus::connect(&bus_address);
-        let chooser = chooser(&connection);
+        let chooser = chooser(&pending_conn);
         call_chooser(&chooser, "OpenFile", "", "Close it", HashMap::new(), 5)
     });
     let request_file = fixture_dir.join("request-5.json");
@@ -280,11 +285,10 @@ fn file_chooser_end_to_end() {
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    let bus_address = bus.address().to_owned();
     let (concurrent_tx, concurrent_rx) = std::sync::mpsc::channel();
+    let concurrent_conn = conn.clone();
     let concurrent = std::thread::spawn(move || {
-        let connection = bus::connect(&bus_address);
-        let chooser = chooser(&connection);
+        let chooser = chooser(&concurrent_conn);
         let result = call_chooser(&chooser, "OpenFile", "", "Concurrent", HashMap::new(), 6);
         concurrent_tx.send(result).unwrap();
     });
@@ -393,6 +397,8 @@ fn public_frontend_routes_file_chooser_and_returns_response() {
         ));
     let _backend = KillOnDrop(backend.spawn().expect("spawn Tessera backend"));
     wait_for_name(&conn, PORTAL);
+    // The backend is private: only the frontend may call it.
+    common::claim_frontend(&conn);
 
     let frontend_log = root.join("frontend.log");
     let frontend = frontend_binary().expect("checked by frontend_prerequisites");

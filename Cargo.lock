@@ -105,6 +105,10 @@ dependencies = [
 [[package]]
 name = "atrium-portal-apps"
 version = "0.0.37"
+dependencies = [
+ "log",
+ "rand",
+]
 
 [[package]]
 name = "atrium-portal-cast"
@@ -141,6 +145,7 @@ name = "atrium-portal-secret"
 version = "0.0.37"
 dependencies = [
  "atrium-portal-request",
+ "libc",
  "log",
  "serde",
  "serde_json",

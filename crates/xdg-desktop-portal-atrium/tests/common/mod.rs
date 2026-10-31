@@ -166,6 +166,79 @@ pub fn daemon_command(bus: &PrivateBus, data: &PathBuf, runtime: &PathBuf) -> Co
     command
 }
 
+/// Impersonate the portal frontend on a private bus.
+///
+/// The backend admits only the peer that owns `org.freedesktop.portal.Desktop`
+/// (see `atrium_portal_request::caller`), so a test client that wants to call
+/// the private interfaces must hold that name first. A real frontend resolves
+/// each sandboxed application's identity itself and forwards the resulting
+/// `app_id`; the fixtures here stand in for it, which is exactly the trust
+/// delegation the daemon relies on.
+///
+/// Requesting the name also makes the backend's `NameOwnerChanged` watcher
+/// learn this connection as the admitted peer. The call is synchronous, so
+/// once it returns the boundary is in place.
+pub fn claim_frontend(conn: &zbus::Connection) {
+    let reply: Result<u32, zbus::Error> = bus::try_call::<_, u32>(
+        &bus::proxy(
+            conn,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        ),
+        "RequestName",
+        &("org.freedesktop.portal.Desktop", 0u32),
+    );
+    // 1 = primary owner; 4 = already owned by this connection.
+    let code = reply.expect("the fixture must own the portal frontend name");
+    assert!(
+        code == 1 || code == 4,
+        "the fixture could not become the frontend (RequestName returned {code})"
+    );
+    await_admission(conn);
+}
+
+/// Wait until the backend actually admits this connection.
+///
+/// The daemon learns the new owner from `NameOwnerChanged`, delivered
+/// asynchronously, so claiming the name does not mean the boundary has moved
+/// yet.
+///
+/// The probe must be an admission-checked **method**. A property will not do:
+/// zbus answers `Properties.Get` without entering a method, so a property read
+/// succeeds before admission is in effect and the fixture would race every
+/// subsequent call. `RemoveNotification` is the right probe — it is
+/// admission-checked first, and for an unknown id it is a side-effect-free
+/// success.
+fn await_admission(conn: &zbus::Connection) {
+    let notifications = bus::proxy(
+        conn,
+        "org.freedesktop.impl.portal.desktop.atrium",
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.impl.portal.Notification",
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let probe: Result<(), zbus::Error> =
+            bus::try_call(&notifications, "RemoveNotification", &("", ""));
+        match probe {
+            Ok(()) => return,
+            Err(error) => {
+                let text = error.to_string();
+                assert!(
+                    text.contains("admits no caller") || text.contains("private backend"),
+                    "the backend rejected the fixture for a reason unrelated to admission: {text}"
+                );
+                assert!(
+                    Instant::now() < deadline,
+                    "the backend never admitted the fixture after it claimed the frontend name"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
 /// Kill a daemon child on drop.
 pub struct KillOnDrop(pub Child);
 
@@ -422,6 +495,10 @@ pub enum FakeSigilResponse {
     Locked,
     Cancelled,
     Error(String),
+    /// Read the request, then hold the connection open without ever
+    /// replying — a wedged sigil whose unlock prompt is never answered.
+    /// The portal must bound this rather than wait forever.
+    Stall,
 }
 
 impl FakeSigil {
@@ -538,6 +615,13 @@ fn serve(
             });
 
         let (status, resp_body) = match &response {
+            // Hold the socket without answering. The thread parks here for
+            // the life of the test, which is exactly the state the portal's
+            // socket timeout must survive.
+            FakeSigilResponse::Stall => {
+                std::thread::sleep(std::time::Duration::from_secs(3600));
+                continue;
+            }
             FakeSigilResponse::Secret(bytes) => (STATUS_SECRET, bytes.clone()),
             FakeSigilResponse::Locked => (STATUS_LOCKED, Vec::new()),
             FakeSigilResponse::Cancelled => (STATUS_CANCELLED, Vec::new()),

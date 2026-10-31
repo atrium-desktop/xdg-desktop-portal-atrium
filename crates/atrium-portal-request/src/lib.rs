@@ -13,10 +13,12 @@ use std::sync::{Arc, Mutex};
 
 use zbus::Variant;
 
+pub mod caller;
 pub mod driver;
 pub mod sync;
 pub mod worker;
 
+pub use caller::{CallerGuard, FRONTEND_BUS_NAME, Refusal};
 pub use driver::{Driver, block_on};
 pub use worker::{MAX_QUEUED_REQUESTS, Supervisor};
 

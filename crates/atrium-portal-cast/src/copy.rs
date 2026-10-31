@@ -140,10 +140,10 @@ pub(crate) fn copy_into_pool(
         log::debug!("portal: no free PipeWire buffer; holding frame for the next cycle");
         return false;
     };
+    // SAFETY: `pool_raw` is a live pool buffer of this stream, dequeued on
+    // this thread; its first spa_data is a mapped memory block of `maxsize`
+    // bytes.
     let published = unsafe {
-        // SAFETY: `pool_raw` is a live pool buffer of this stream,
-        // dequeued on this thread; its first spa_data is a mapped memory
-        // block of `maxsize` bytes.
         let spa_buffer = (*pool_raw).buffer;
         let spa_data = (*spa_buffer).datas;
         let dest_ptr = (*spa_data).data.cast::<u8>();

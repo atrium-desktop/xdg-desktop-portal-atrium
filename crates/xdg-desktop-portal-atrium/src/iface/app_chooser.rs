@@ -102,6 +102,9 @@ pub(crate) enum AppChooserJob {
 /// registers the request object, and enqueues; the dialog runs on the
 /// worker.
 pub(crate) struct AppChooserIface {
+    /// Admission: only the portal frontend may call a private backend
+    /// (see `atrium_portal_request::caller`).
+    pub(crate) callers: Arc<atrium_portal_request::CallerGuard>,
     pub(crate) conn: zbus::Connection,
     pub(crate) tracker: Arc<Mutex<RequestTracker>>,
     pub(crate) jobs: mpsc::SyncSender<AppChooserJob>,
@@ -118,7 +121,15 @@ impl AppChooserIface {
         choices: Vec<String>,
         content_type: &str,
         options: HashMap<String, Variant<'_>>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         let path = handle.as_str().to_string();
         log::info!("portal: ChooseApplication for '{app_id}' ({content_type}) at {path}");
 
@@ -161,7 +172,15 @@ impl AppChooserIface {
         &self,
         handle: ObjectPath<'_>,
         choices: Vec<(String, HashMap<String, Variant<'_>>)>,
+
+        #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<()> {
+        // Admission first: `app_id` is caller-supplied and unverifiable, so
+        // the only sound boundary is "is the sender the portal frontend?".
+        // Nothing below may run for any other peer.
+        self.callers
+            .admit(header.sender().map(|sender| sender.as_str()))
+            .map_err(zbus::fdo::Error::from)?;
         if choices.len() > MAX_CHOICES
             || choices
                 .iter()

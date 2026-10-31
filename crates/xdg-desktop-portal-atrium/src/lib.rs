@@ -57,7 +57,7 @@ mod uri;
 
 use std::sync::{Arc, Mutex};
 
-use atrium_portal_request::{RequestTracker, Supervisor};
+use atrium_portal_request::{CallerGuard, RequestTracker, Supervisor};
 use atrium_portal_secret::{SecretError, SecretService};
 use screencast::{CastJob, RestoreStore, ScreenCastIface, SessionRegistry};
 use screenshot::{CaptureJob, ScreenshotIface};
@@ -66,6 +66,34 @@ use settings::{SettingsIface, SettingsStore};
 /// The well-known bus name the portal frontend resolves through the
 /// `atrium.portal` file's `DBusName`.
 pub const BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.atrium";
+
+/// Seed the caller guard with the frontend's current unique name.
+///
+/// `GetNameOwner` is the authoritative answer at startup, before any
+/// `NameOwnerChanged` can be observed. A failure leaves the guard unseeded,
+/// which admits nobody: the daemon would rather refuse every call than admit an
+/// unverified one.
+async fn seed_caller_guard(conn: &zbus::Connection, callers: &CallerGuard) {
+    let owner = match zbus::fdo::DBusProxy::new(conn).await {
+        Ok(bus) => match atrium_portal_request::FRONTEND_BUS_NAME.try_into().ok() {
+            Some(name) => atrium_portal_request::block_on(bus.get_name_owner(name))
+                .ok()
+                .map(|owner| owner.to_string()),
+            None => None,
+        },
+        Err(error) => {
+            log::warn!("portal: system bus unavailable while seeding admission: {error}");
+            None
+        }
+    };
+    if owner.is_none() {
+        log::warn!(
+            "portal: {} is not on the bus yet; admitting no caller until it appears",
+            atrium_portal_request::FRONTEND_BUS_NAME
+        );
+    }
+    callers.observe_owner(owner.as_deref());
+}
 /// The object path every portal backend serves its interfaces at.
 pub const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
 
@@ -105,11 +133,24 @@ fn spawn_worker(
     Ok(())
 }
 
-/// Watch `NameOwnerChanged` and drop mode-2 screencast restore tokens when
-/// their owner's unique name vanishes from the bus.
+/// Watch `NameOwnerChanged` and reclaim what a vanished client owned: its
+/// mode-2 screencast restore tokens, and its ScreenCast sessions.
+///
+/// Sessions must be reclaimed here and not only through `Session.Close`: a
+/// client that crashes never sends `Close`, and its session would otherwise
+/// keep a compositor capture running — and one of `MAX_LIVE_CASTS` — until the
+/// portal itself restarts.
+///
+/// A lag on the match stream must not stop the GC: losing it would silently
+/// disable both reclamations for the rest of the session, so the stream is
+/// re-subscribed instead of abandoned.
 fn spawn_restore_watcher(
     conn: zbus::Connection,
     store: Arc<Mutex<RestoreStore>>,
+    sessions: Arc<Mutex<SessionRegistry>>,
+    jobs: std::sync::mpsc::SyncSender<CastJob>,
+    inhibit_registry: Arc<Mutex<inhibit::InhibitRegistry>>,
+    callers: Arc<CallerGuard>,
 ) -> Result<(), PortalError> {
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
@@ -117,29 +158,84 @@ fn spawn_restore_watcher(
         .interface("org.freedesktop.DBus")
         .member("NameOwnerChanged")
         .build()?;
-    let stream = atrium_portal_request::block_on(async {
-        zbus::MessageStream::for_match_rule(rule, &conn, std::num::NonZeroUsize::new(64)).await
-    })?;
     spawn_worker("atrium-portal-restore-gc", move || {
         use futures_util::StreamExt as _;
-        let mut stream = stream;
         loop {
-            let next = atrium_portal_request::block_on(stream.next());
-            let Some(Ok(message)) = next else {
-                log::info!("portal: NameOwnerChanged watch ended; restore GC stops");
-                break;
+            let stream = atrium_portal_request::block_on(async {
+                zbus::MessageStream::for_match_rule(
+                    rule.clone(),
+                    &conn,
+                    std::num::NonZeroUsize::new(64),
+                )
+                .await
+            });
+            let mut stream = match stream {
+                Ok(stream) => stream,
+                Err(error) => {
+                    // The connection itself is unusable; the process exits for
+                    // reactivation through the keep-alive path.
+                    log::error!("portal: NameOwnerChanged watch could not start: {error}");
+                    return;
+                }
             };
-            let Some(signal) = zbus::fdo::NameOwnerChanged::from_message(message) else {
-                continue;
-            };
-            let Ok(args) = signal.args() else {
-                continue;
-            };
-            // Only unique-name departures matter: the name is the token
-            // owner key, and a well-known name's owner change keeps it.
-            if args.new_owner().is_none() && args.name().as_str().starts_with(':') {
+            loop {
+                let next = atrium_portal_request::block_on(stream.next());
+                let Some(Ok(message)) = next else {
+                    // A lagged or closed stream: drop it and re-subscribe, so
+                    // one burst of bus traffic cannot disable the GC forever.
+                    log::warn!("portal: NameOwnerChanged watch restarted after an error");
+                    break;
+                };
+                let Some(signal) = zbus::fdo::NameOwnerChanged::from_message(message) else {
+                    continue;
+                };
+                let Ok(args) = signal.args() else {
+                    continue;
+                };
+                // Keep admission current first: a frontend that gained, lost,
+                // or changed its unique name moves the boundary for every
+                // interface, including calls already in flight behind this
+                // signal.
+                if args.name().as_str() == atrium_portal_request::FRONTEND_BUS_NAME {
+                    let owner: Option<String> =
+                        args.new_owner().as_ref().map(|owner| owner.to_string());
+                    callers.observe_owner(owner.as_deref());
+                }
+                // Only unique-name departures matter below: the name is the
+                // owner key, and a well-known name's owner change keeps it.
+                if args.new_owner().is_some() || !args.name().as_str().starts_with(':') {
+                    continue;
+                }
+                let owner = args.name().as_str();
                 atrium_portal_request::sync::lock(&store, "screencast restore store")
-                    .drop_owner(args.name().as_str());
+                    .drop_owner(owner);
+                // Enqueue the teardown on the screencast worker, which owns
+                // the cast threads; `try_send` because this thread must never
+                // block on a full queue.
+                let orphaned = atrium_portal_request::sync::lock(&sessions, "screencast sessions")
+                    .remove_owned_by(owner);
+                // Inhibitions hold logind descriptors: a dead client must not
+                // keep the session awake or un-suspendable.
+                let released =
+                    atrium_portal_request::sync::lock(&inhibit_registry, "inhibit registry")
+                        .release_owned_by(owner);
+                if released > 0 {
+                    log::info!(
+                        "portal: released {released} inhibition(s) held by departed {owner}"
+                    );
+                }
+                for session_path in orphaned {
+                    log::info!(
+                        "portal: reclaiming session {session_path}; its owner {owner} left the bus"
+                    );
+                    if let Err(error) = jobs.try_send(CastJob::SessionEnded {
+                        session_path: session_path.clone(),
+                    }) {
+                        log::error!(
+                            "portal: could not enqueue teardown for orphaned {session_path}: {error}"
+                        );
+                    }
+                }
             }
         }
     })
@@ -192,12 +288,19 @@ pub fn run() -> Result<(), PortalError> {
     let settings_store = SettingsStore::default();
     settings::prime_store(&socket, &settings_store);
 
+    // Admission: only the portal frontend may call this private backend, since
+    // `app_id` is caller-supplied and unverifiable. One guard is shared by
+    // every interface, seeded from the bus now and kept current by the name
+    // watcher below. Until it knows the frontend it admits nobody (fail closed).
+    let callers = CallerGuard::new();
+    atrium_portal_request::block_on(seed_caller_guard(&conn, callers.as_ref()));
+
     // Secret is declared in atrium.portal, so its storage is part of the
     // service's startup contract. Never acquire the bus name with that
     // advertised interface missing. Storage, unlock, and lock state are
     // delegated to the sigil daemon (ADR-0020); this adapter only projects
     // the portal interface onto sigil's native IPC client.
-    let secret_service = Arc::new(SecretService::new());
+    let secret_service = SecretService::new(Arc::clone(&callers));
 
     // Serve before requesting the name so no call can arrive at a name we own
     // but do not serve yet (same ordering as the SNI tray watcher).
@@ -213,6 +316,7 @@ pub fn run() -> Result<(), PortalError> {
     }
     let tracker__ = tracker.clone();
     let jobs__ = jobs.clone();
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
@@ -222,6 +326,7 @@ pub fn run() -> Result<(), PortalError> {
                         conn: conn.clone(),
                         tracker: tracker__,
                         jobs: jobs__,
+                        callers: Arc::clone(&callers__),
                     },
                 )
                 .await
@@ -230,6 +335,7 @@ pub fn run() -> Result<(), PortalError> {
     let tracker__ = tracker.clone();
     let sessions__ = sessions.clone();
     let cast_jobs__ = cast_jobs.clone();
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
@@ -240,12 +346,15 @@ pub fn run() -> Result<(), PortalError> {
                         tracker: tracker__,
                         sessions: sessions__,
                         jobs: cast_jobs__,
+                        callers: Arc::clone(&callers__),
                     },
                 )
                 .await
         })
     })?;
-    // Stateless sandbox-policy query surface; no worker, no IPC.
+    // Stateless sandbox-policy query surface; no worker, no IPC. It serves only
+    // properties, which zbus answers without a message header, so admission
+    // cannot apply here; the values are sandbox-policy booleans, not secrets.
     driver.call(|conn| {
         atrium_portal_request::block_on(async {
             conn.object_server()
@@ -255,6 +364,7 @@ pub fn run() -> Result<(), PortalError> {
     })?;
     let tracker__ = tracker.clone();
     let file_chooser_jobs__ = file_chooser_jobs.clone();
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
@@ -264,6 +374,7 @@ pub fn run() -> Result<(), PortalError> {
                         conn: conn.clone(),
                         tracker: tracker__,
                         jobs: file_chooser_jobs__,
+                        callers: Arc::clone(&callers__),
                     },
                 )
                 .await
@@ -271,6 +382,7 @@ pub fn run() -> Result<(), PortalError> {
     })?;
     // Email hand-off is fire-and-forget (no worker, no IPC).
     let tracker__ = tracker.clone();
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
@@ -279,6 +391,7 @@ pub fn run() -> Result<(), PortalError> {
                     email::EmailIface {
                         conn: conn.clone(),
                         tracker: tracker__,
+                        callers: Arc::clone(&callers__),
                     },
                 )
                 .await
@@ -286,6 +399,7 @@ pub fn run() -> Result<(), PortalError> {
     })?;
     let tracker__ = tracker.clone();
     let account_jobs__ = account_jobs.clone();
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
@@ -295,6 +409,7 @@ pub fn run() -> Result<(), PortalError> {
                         conn: conn.clone(),
                         tracker: tracker__,
                         jobs: account_jobs__,
+                        callers: Arc::clone(&callers__),
                     },
                 )
                 .await
@@ -302,6 +417,7 @@ pub fn run() -> Result<(), PortalError> {
     })?;
     let tracker__ = tracker.clone();
     let access_jobs__ = access_jobs.clone();
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
@@ -311,6 +427,7 @@ pub fn run() -> Result<(), PortalError> {
                         conn: conn.clone(),
                         tracker: tracker__,
                         jobs: access_jobs__,
+                        callers: Arc::clone(&callers__),
                     },
                 )
                 .await
@@ -318,6 +435,7 @@ pub fn run() -> Result<(), PortalError> {
     })?;
     let tracker__ = tracker.clone();
     let app_chooser_jobs__ = app_chooser_jobs.clone();
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
@@ -327,6 +445,7 @@ pub fn run() -> Result<(), PortalError> {
                         conn: conn.clone(),
                         tracker: tracker__,
                         jobs: app_chooser_jobs__,
+                        callers: Arc::clone(&callers__),
                     },
                 )
                 .await
@@ -334,6 +453,7 @@ pub fn run() -> Result<(), PortalError> {
     })?;
     let tracker__ = tracker.clone();
     let open_uri_jobs__ = open_uri_jobs.clone();
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
@@ -343,6 +463,7 @@ pub fn run() -> Result<(), PortalError> {
                         conn: conn.clone(),
                         tracker: tracker__,
                         jobs: open_uri_jobs__,
+                        callers: Arc::clone(&callers__),
                     },
                 )
                 .await
@@ -350,6 +471,7 @@ pub fn run() -> Result<(), PortalError> {
     })?;
     let tracker__ = tracker.clone();
     let background_jobs__ = background_jobs.clone();
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
@@ -359,20 +481,30 @@ pub fn run() -> Result<(), PortalError> {
                         conn: conn.clone(),
                         tracker: tracker__,
                         jobs: background_jobs__,
+                        callers: Arc::clone(&callers__),
                     },
                 )
                 .await
         })
     })?;
-    // Inhibit calls logind in-method (one fast system-bus round trip); no
-    // worker, no compositor IPC.
+    // Inhibit awaits logind in-method (one fast system-bus round trip); no
+    // worker, no compositor IPC. Its registry is shared with the bus-name GC
+    // so a client that dies releases the logind locks it took.
+    let inhibit_registry = Arc::new(Mutex::new(inhibit::InhibitRegistry::default()));
+    let inhibit_registry__ = Arc::clone(&inhibit_registry);
+    let callers__ = Arc::clone(&callers);
     let tracker__ = tracker.clone();
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
                 .at(
                     DESKTOP_PATH,
-                    inhibit::InhibitIface::new(conn.clone(), tracker__),
+                    inhibit::InhibitIface::new(
+                        conn.clone(),
+                        tracker__,
+                        inhibit_registry__,
+                        callers__,
+                    ),
                 )
                 .await
         })
@@ -383,18 +515,23 @@ pub fn run() -> Result<(), PortalError> {
     let notify_live = Arc::new(std::sync::Mutex::new(
         notification::LiveNotifications::default(),
     ));
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
                 .at(
                     DESKTOP_PATH,
-                    notification::NotificationIface::new(Arc::clone(&notify_live)),
+                    notification::NotificationIface::new(
+                        Arc::clone(&notify_live),
+                        Arc::clone(&callers__),
+                    ),
                 )
                 .await
         })
     })?;
     let tracker__ = tracker.clone();
     let wallpaper_jobs__ = wallpaper_jobs.clone();
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
@@ -404,6 +541,7 @@ pub fn run() -> Result<(), PortalError> {
                         conn: conn.clone(),
                         tracker: tracker__,
                         jobs: wallpaper_jobs__,
+                        callers: Arc::clone(&callers__),
                     },
                 )
                 .await
@@ -411,6 +549,7 @@ pub fn run() -> Result<(), PortalError> {
     })?;
     let tracker__ = tracker.clone();
     let print_jobs__ = print_jobs.clone();
+    let callers__ = Arc::clone(&callers);
     driver.call(move |conn| {
         atrium_portal_request::block_on(async move {
             conn.object_server()
@@ -420,6 +559,7 @@ pub fn run() -> Result<(), PortalError> {
                         conn: conn.clone(),
                         tracker: tracker__,
                         jobs: print_jobs__,
+                        callers: Arc::clone(&callers__),
                     },
                 )
                 .await
@@ -427,6 +567,13 @@ pub fn run() -> Result<(), PortalError> {
     })?;
 
     secret_service.register_portal(&driver, &conn, Arc::clone(&tracker), DESKTOP_PATH)?;
+    // The sigil round trip can wait for the user to unlock the vault, so it
+    // runs on a supervised worker rather than inside the served method (see
+    // the `atrium_portal_secret::portal` module docs).
+    let secret_tracker = Arc::clone(&tracker);
+    spawn_worker("atrium-portal-secret", move || {
+        secret_service.serve(Arc::clone(&secret_tracker));
+    })?;
 
     let worker_tracker = Arc::clone(&tracker);
     let worker_socket = socket.clone();
@@ -440,6 +587,8 @@ pub fn run() -> Result<(), PortalError> {
     let cast_worker_tracker = Arc::clone(&tracker);
     let cast_worker_socket = socket.clone();
     let cast_worker_store = Arc::clone(&restore_store);
+    let gc_sessions = Arc::clone(&sessions);
+    let gc_jobs = cast_jobs.clone();
     spawn_worker("atrium-portal-screencast", move || {
         cast_supervisor.serve(|cast_rx| {
             screencast::cast_worker(
@@ -455,8 +604,16 @@ pub fn run() -> Result<(), PortalError> {
     })?;
 
     // Mode-2 restore tokens live exactly as long as the caller's bus
-    // connection: drop them when the owning unique name vanishes.
-    spawn_restore_watcher(conn.clone(), restore_store)?;
+    // connection, and a ScreenCast session must not outlive it either: reclaim
+    // both when the owning unique name vanishes.
+    spawn_restore_watcher(
+        conn.clone(),
+        restore_store,
+        gc_sessions,
+        gc_jobs,
+        inhibit_registry,
+        callers,
+    )?;
 
     // FileChooser dispatches one supervised UI task/process per request and
     // never shares the compositor capture worker.
