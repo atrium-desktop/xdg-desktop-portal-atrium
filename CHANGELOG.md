@@ -15,6 +15,25 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A panicking interface worker no longer disables its interface
+  ([ADR-0028](docs/adr/0028-supervised-workers-and-test-isolation.md)).** Each
+  of the daemon's eleven workers now runs under `atrium_portal_request::Supervisor`:
+  a panic costs the in-flight request only, and the next request is served by a
+  restarted worker over the same queue. Previously the worker's channel
+  disconnected on panic and every later request on that interface answered
+  "worker is gone" until the process restarted — which, for a D-Bus-activated
+  resident daemon, meant until the session ended.
+- **No request path panics on a compositor protocol violation.** The five
+  `unreachable!()` arms in the stream-message decoder and the settings-watch
+  loop's `unreachable!()` now report the mismatch as an error. A `type` tag and
+  the enum variant it decodes into are two discriminants, and a resident daemon
+  must not abort when they disagree.
+- **Autostart entry creation derives its directory without `expect`.** The path
+  builder and the directory now come from the same expression, so the invariant
+  is structural rather than asserted in a request path.
+
 ## [0.0.35] - 2026-10-31
 
 ### Fixed

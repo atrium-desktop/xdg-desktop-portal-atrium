@@ -96,7 +96,7 @@ fn account_reason(options: &HashMap<String, Value<'_>>) -> Result<Option<String>
 
 /// Dispatch consent prompts independently so one application leaving a
 /// prompt open cannot head-of-line block every other Account request.
-pub(crate) fn account_worker(rx: mpsc::Receiver<AccountJob>, tracker: Arc<Mutex<RequestTracker>>) {
+pub(crate) fn account_worker(rx: &mpsc::Receiver<AccountJob>, tracker: Arc<Mutex<RequestTracker>>) {
     const MAX_ACTIVE_ACCOUNT_REQUESTS: usize = 32;
     struct ActiveGuard(Arc<std::sync::atomic::AtomicUsize>);
     impl Drop for ActiveGuard {

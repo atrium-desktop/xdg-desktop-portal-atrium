@@ -650,6 +650,10 @@ impl Client {
         match value.get("type").and_then(serde_json::Value::as_str) {
             Some("StreamFrame") => {
                 let event: Event = serde_json::from_value(value).map_err(json_error)?;
+                // Destructure through `match` rather than `let ... else
+                // unreachable!()`: the `type` string above and the enum variant
+                // are two different discriminants, and a projection that lets
+                // them diverge must be reported, not panic a resident daemon.
                 let Event::StreamFrame {
                     stream_id,
                     sequence,
@@ -663,7 +667,7 @@ impl Client {
                     slot,
                 } = event
                 else {
-                    unreachable!();
+                    return Err(unexpected_event("StreamFrame", &event));
                 };
                 let payload = match slot {
                     Some(_) => StreamPayload::Slot,
@@ -692,7 +696,7 @@ impl Client {
             Some("StreamEnded") => {
                 let event: Event = serde_json::from_value(value).map_err(json_error)?;
                 let Event::StreamEnded { stream_id, reason } = event else {
-                    unreachable!();
+                    return Err(unexpected_event("StreamEnded", &event));
                 };
                 Ok(Some(StreamMessage::Ended { stream_id, reason }))
             }
@@ -704,7 +708,7 @@ impl Client {
                     height,
                 } = event
                 else {
-                    unreachable!();
+                    return Err(unexpected_event("StreamGeometryChanged", &event));
                 };
                 Ok(Some(StreamMessage::GeometryChanged {
                     stream_id,
@@ -715,7 +719,10 @@ impl Client {
             Some("LeaseRenewed") => {
                 let response: Response = serde_json::from_value(value).map_err(json_error)?;
                 let Response::LeaseRenewed { lease } = response else {
-                    unreachable!();
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("expected LeaseRenewed, got {response:?}"),
+                    ));
                 };
                 self.lease = Some(lease);
                 Ok(Some(StreamMessage::LeaseRenewed))
@@ -723,7 +730,7 @@ impl Client {
             Some("Error") => {
                 let response: Response = serde_json::from_value(value).map_err(json_error)?;
                 let Response::Error { message } = response else {
-                    unreachable!();
+                    return Err(unexpected("Error", &response));
                 };
                 Err(io::Error::other(message))
             }
@@ -746,6 +753,14 @@ fn unexpected(expected: &str, response: &Response) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         format!("expected {expected}, got {response:?}"),
+    )
+}
+
+/// A `type` tag selected one event variant but the payload decoded as another.
+fn unexpected_event(expected: &str, event: &Event) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("expected {expected}, got {event:?}"),
     )
 }
 

@@ -6,6 +6,9 @@
 - Enable the Git hooks and learn the helper scripts with
   [Repository Tooling](repository-tooling.md).
 - Exercise portal dialogs and pickers with [Portal UI Testing](portal-ui-testing.md).
+- Follow [Test Process Hygiene](test-process-hygiene.md) whenever a test
+  spawns a process, so a killed test cannot leak a daemon or wedge the
+  machine.
 - Read [Documentation Governance](documentation/index.md) before changing
   documentation.
 - Record durable Portal architecture decisions in the

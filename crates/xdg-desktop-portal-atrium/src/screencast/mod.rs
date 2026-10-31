@@ -417,7 +417,7 @@ impl ScreenCastIface {
 /// responsive even while another application has a confirmation open.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cast_worker(
-    rx: mpsc::Receiver<CastJob>,
+    rx: &mpsc::Receiver<CastJob>,
     jobs: mpsc::SyncSender<CastJob>,
     conn: zbus::blocking::Connection,
     tracker: Arc<Mutex<RequestTracker>>,

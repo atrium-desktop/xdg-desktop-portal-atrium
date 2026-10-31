@@ -221,7 +221,7 @@ impl ScreenshotIface {
 /// or color picks. The cap bounds memory/thread consumption under a hostile
 /// request flood.
 pub(crate) fn capture_worker(
-    rx: mpsc::Receiver<CaptureJob>,
+    rx: &mpsc::Receiver<CaptureJob>,
     tracker: Arc<Mutex<RequestTracker>>,
     socket: std::path::PathBuf,
 ) {

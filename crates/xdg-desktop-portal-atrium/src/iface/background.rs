@@ -253,8 +253,11 @@ fn write_autostart_entry(
 ) -> std::io::Result<PathBuf> {
     use std::os::unix::fs::PermissionsExt as _;
     let path = autostart_entry_path(config_dir, app_id);
-    let directory = path.parent().expect("autostart path has a parent");
-    std::fs::create_dir_all(directory)?;
+    // `autostart_entry_path` always appends `autostart/<id>.desktop`, so the
+    // parent exists by construction. Deriving it from the same expression the
+    // path builder used keeps that true without an `expect` in a request path.
+    let directory = config_dir.join("autostart");
+    std::fs::create_dir_all(&directory)?;
     let temporary = directory.join(format!(".{app_id}.desktop.atrium-{}", std::process::id()));
     std::fs::write(&temporary, render_desktop_entry(app_id, spec))?;
     std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o644))?;
@@ -273,7 +276,7 @@ fn results(autostart: bool) -> HashMap<String, Value<'static>> {
 /// Dispatch consent prompts independently so one application leaving a
 /// prompt open cannot head-of-line block every other Background request.
 pub(crate) fn background_worker(
-    rx: mpsc::Receiver<BackgroundJob>,
+    rx: &mpsc::Receiver<BackgroundJob>,
     tracker: Arc<Mutex<RequestTracker>>,
 ) {
     const MAX_ACTIVE_BACKGROUND_REQUESTS: usize = 32;

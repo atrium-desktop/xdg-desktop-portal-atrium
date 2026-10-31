@@ -292,7 +292,7 @@ fn submit(lp: &str, title: &str, file: &Path) -> Result<(), String> {
 
 /// Dispatch print jobs independently so one slow spool cannot
 /// head-of-line block another application's request.
-pub(crate) fn print_worker(rx: mpsc::Receiver<PrintJob>, tracker: Arc<Mutex<RequestTracker>>) {
+pub(crate) fn print_worker(rx: &mpsc::Receiver<PrintJob>, tracker: Arc<Mutex<RequestTracker>>) {
     const MAX_ACTIVE_PRINT_REQUESTS: usize = 32;
     struct ActiveGuard(Arc<std::sync::atomic::AtomicUsize>);
     impl Drop for ActiveGuard {

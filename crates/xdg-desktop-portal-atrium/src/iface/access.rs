@@ -150,7 +150,7 @@ fn dialog_request(
 
 /// Dispatch consent prompts independently so one application leaving a
 /// prompt open cannot head-of-line block every other Access request.
-pub(crate) fn access_worker(rx: mpsc::Receiver<AccessJob>, tracker: Arc<Mutex<RequestTracker>>) {
+pub(crate) fn access_worker(rx: &mpsc::Receiver<AccessJob>, tracker: Arc<Mutex<RequestTracker>>) {
     const MAX_ACTIVE_ACCESS_REQUESTS: usize = 32;
     struct ActiveGuard(Arc<std::sync::atomic::AtomicUsize>);
     impl Drop for ActiveGuard {

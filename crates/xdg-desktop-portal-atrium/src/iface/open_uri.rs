@@ -276,7 +276,10 @@ fn launch_app(app: &AppInfo, uri: &str) -> Result<(), String> {
 
 /// Dispatch open requests independently so one application leaving the
 /// chooser open cannot head-of-line block every other OpenURI request.
-pub(crate) fn open_uri_worker(rx: mpsc::Receiver<OpenUriJob>, tracker: Arc<Mutex<RequestTracker>>) {
+pub(crate) fn open_uri_worker(
+    rx: &mpsc::Receiver<OpenUriJob>,
+    tracker: Arc<Mutex<RequestTracker>>,
+) {
     const MAX_ACTIVE_OPEN_REQUESTS: usize = 32;
     struct ActiveGuard(Arc<std::sync::atomic::AtomicUsize>);
     impl Drop for ActiveGuard {

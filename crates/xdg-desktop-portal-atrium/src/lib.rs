@@ -55,9 +55,9 @@ mod ipc;
 mod screencast;
 mod uri;
 
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
 
-use atrium_portal_request::RequestTracker;
+use atrium_portal_request::{RequestTracker, Supervisor};
 use atrium_portal_secret::{SecretError, SecretService};
 use screencast::{CastJob, RestoreStore, ScreenCastIface, SessionRegistry};
 use screenshot::{CaptureJob, ScreenshotIface};
@@ -158,22 +158,29 @@ pub fn run() -> Result<(), PortalError> {
     let tracker = Arc::new(Mutex::new(RequestTracker::default()));
     let sessions = Arc::new(Mutex::new(SessionRegistry::default()));
     let restore_store = Arc::new(Mutex::new(RestoreStore::load(screencast::data_dir())));
-    const MAX_QUEUED_REQUESTS: usize = 128;
-    let (jobs, rx) = mpsc::sync_channel::<CaptureJob>(MAX_QUEUED_REQUESTS);
-    let (cast_jobs, cast_rx) = mpsc::sync_channel::<CastJob>(MAX_QUEUED_REQUESTS);
-    let (file_chooser_jobs, file_chooser_rx) =
-        mpsc::sync_channel::<file_chooser::FileChooserJob>(MAX_QUEUED_REQUESTS);
-    let (account_jobs, account_rx) = mpsc::sync_channel::<account::AccountJob>(MAX_QUEUED_REQUESTS);
-    let (access_jobs, access_rx) = mpsc::sync_channel::<access::AccessJob>(MAX_QUEUED_REQUESTS);
-    let (app_chooser_jobs, app_chooser_rx) =
-        mpsc::sync_channel::<app_chooser::AppChooserJob>(MAX_QUEUED_REQUESTS);
-    let (open_uri_jobs, open_uri_rx) =
-        mpsc::sync_channel::<open_uri::OpenUriJob>(MAX_QUEUED_REQUESTS);
-    let (background_jobs, background_rx) =
-        mpsc::sync_channel::<background::BackgroundJob>(MAX_QUEUED_REQUESTS);
-    let (wallpaper_jobs, wallpaper_rx) =
-        mpsc::sync_channel::<wallpaper::WallpaperJob>(MAX_QUEUED_REQUESTS);
-    let (print_jobs, print_rx) = mpsc::sync_channel::<print::PrintJob>(MAX_QUEUED_REQUESTS);
+    // Every interface worker runs on a supervised, bounded queue (ADR-0028):
+    // a panic in one worker restarts it instead of bricking its interface for
+    // the life of this D-Bus-activated process.
+    let capture_supervisor = Supervisor::<CaptureJob>::new("capture");
+    let jobs = capture_supervisor.sender();
+    let cast_supervisor = Supervisor::<CastJob>::new("screencast");
+    let cast_jobs = cast_supervisor.sender();
+    let file_chooser_supervisor = Supervisor::<file_chooser::FileChooserJob>::new("file chooser");
+    let file_chooser_jobs = file_chooser_supervisor.sender();
+    let account_supervisor = Supervisor::<account::AccountJob>::new("account");
+    let account_jobs = account_supervisor.sender();
+    let access_supervisor = Supervisor::<access::AccessJob>::new("access");
+    let access_jobs = access_supervisor.sender();
+    let app_chooser_supervisor = Supervisor::<app_chooser::AppChooserJob>::new("app chooser");
+    let app_chooser_jobs = app_chooser_supervisor.sender();
+    let open_uri_supervisor = Supervisor::<open_uri::OpenUriJob>::new("open uri");
+    let open_uri_jobs = open_uri_supervisor.sender();
+    let background_supervisor = Supervisor::<background::BackgroundJob>::new("background");
+    let background_jobs = background_supervisor.sender();
+    let wallpaper_supervisor = Supervisor::<wallpaper::WallpaperJob>::new("wallpaper");
+    let wallpaper_jobs = wallpaper_supervisor.sender();
+    let print_supervisor = Supervisor::<print::PrintJob>::new("print");
+    let print_jobs = print_supervisor.sender();
     let settings_store = SettingsStore::default();
     settings::prime_store(&socket, &settings_store);
 
@@ -302,7 +309,9 @@ pub fn run() -> Result<(), PortalError> {
     let worker_tracker = Arc::clone(&tracker);
     let worker_socket = socket.clone();
     spawn_worker("atrium-portal-capture", move || {
-        screenshot::capture_worker(rx, worker_tracker, worker_socket)
+        capture_supervisor.serve(|queue| {
+            screenshot::capture_worker(queue, Arc::clone(&worker_tracker), worker_socket.clone())
+        });
     })?;
 
     let cast_worker_conn = conn.clone();
@@ -310,15 +319,17 @@ pub fn run() -> Result<(), PortalError> {
     let cast_worker_socket = socket.clone();
     let cast_worker_store = Arc::clone(&restore_store);
     spawn_worker("atrium-portal-screencast", move || {
-        screencast::cast_worker(
-            cast_rx,
-            cast_jobs,
-            cast_worker_conn,
-            cast_worker_tracker,
-            sessions,
-            cast_worker_store,
-            cast_worker_socket,
-        )
+        cast_supervisor.serve(|cast_rx| {
+            screencast::cast_worker(
+                cast_rx,
+                cast_jobs.clone(),
+                cast_worker_conn.clone(),
+                Arc::clone(&cast_worker_tracker),
+                Arc::clone(&sessions),
+                Arc::clone(&cast_worker_store),
+                cast_worker_socket.clone(),
+            )
+        })
     })?;
 
     // Mode-2 restore tokens live exactly as long as the caller's bus
@@ -329,38 +340,41 @@ pub fn run() -> Result<(), PortalError> {
     // never shares the compositor capture worker.
     let file_chooser_tracker = Arc::clone(&tracker);
     spawn_worker("atrium-portal-file-chooser", move || {
-        file_chooser::file_chooser_worker(file_chooser_rx, file_chooser_tracker)
+        file_chooser_supervisor
+            .serve(|rx| file_chooser::file_chooser_worker(rx, Arc::clone(&file_chooser_tracker)))
     })?;
 
     let account_tracker = Arc::clone(&tracker);
     spawn_worker("atrium-portal-account", move || {
-        account::account_worker(account_rx, account_tracker)
+        account_supervisor.serve(|rx| account::account_worker(rx, Arc::clone(&account_tracker)))
     })?;
 
     let access_tracker = Arc::clone(&tracker);
     spawn_worker("atrium-portal-access", move || {
-        access::access_worker(access_rx, access_tracker)
+        access_supervisor.serve(|rx| access::access_worker(rx, Arc::clone(&access_tracker)))
     })?;
 
     // AppChooser uses the same per-request supervised prompter pattern as
     // Access; candidate resolution happens in the served method.
     let app_chooser_tracker = Arc::clone(&tracker);
     spawn_worker("atrium-portal-app-chooser", move || {
-        app_chooser::app_chooser_worker(app_chooser_rx, app_chooser_tracker)
+        app_chooser_supervisor
+            .serve(|rx| app_chooser::app_chooser_worker(rx, Arc::clone(&app_chooser_tracker)))
     })?;
 
     // OpenURI launches resolved applications itself and reuses the
     // AppChooser dialog when the user must pick one.
     let open_uri_tracker = Arc::clone(&tracker);
     spawn_worker("atrium-portal-open-uri", move || {
-        open_uri::open_uri_worker(open_uri_rx, open_uri_tracker)
+        open_uri_supervisor.serve(|rx| open_uri::open_uri_worker(rx, Arc::clone(&open_uri_tracker)))
     })?;
 
     // Background consent uses the same supervised confirmation prompt as
     // Access; the autostart entry write happens on the worker task.
     let background_tracker = Arc::clone(&tracker);
     spawn_worker("atrium-portal-background", move || {
-        background::background_worker(background_rx, background_tracker)
+        background_supervisor
+            .serve(|rx| background::background_worker(rx, Arc::clone(&background_tracker)))
     })?;
 
     // Wallpaper crosses the compositor IPC and does slow image I/O, so it
@@ -370,14 +384,20 @@ pub fn run() -> Result<(), PortalError> {
     let wallpaper_tracker = Arc::clone(&tracker);
     let wallpaper_socket = socket.clone();
     spawn_worker("atrium-portal-wallpaper", move || {
-        wallpaper::wallpaper_worker(wallpaper_rx, wallpaper_tracker, wallpaper_socket)
+        wallpaper_supervisor.serve(|rx| {
+            wallpaper::wallpaper_worker(
+                rx,
+                Arc::clone(&wallpaper_tracker),
+                wallpaper_socket.clone(),
+            )
+        })
     })?;
 
     // Print spools the document and hands it to the system `lp` client
     // (the email/xdg-email hand-off precedent).
     let print_tracker = Arc::clone(&tracker);
     spawn_worker("atrium-portal-print", move || {
-        print::print_worker(print_rx, print_tracker)
+        print_supervisor.serve(|rx| print::print_worker(rx, Arc::clone(&print_tracker)))
     })?;
 
     settings::spawn_watcher(conn.clone(), socket, settings_store).map_err(PortalError::Worker)?;

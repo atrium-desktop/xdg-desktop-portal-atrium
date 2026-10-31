@@ -353,7 +353,15 @@ fn watch_loop(conn: zbus::blocking::Connection, socket: PathBuf, store: Settings
     let mut reported_disconnect = false;
     loop {
         match watch_connection(&conn, &socket, &store) {
-            Ok(()) => unreachable!("settings subscription only exits on an IPC error"),
+            // The subscription is an endless event loop, so returning normally
+            // means the compositor ended the stream cleanly. Reconnect exactly
+            // as an error would: the store keeps serving its last snapshot, and
+            // a panic here would silently stop settings updates for the life of
+            // the daemon.
+            Ok(()) => {
+                log::info!("portal: compositor settings stream ended; reconnecting");
+                reported_disconnect = false;
+            }
             Err(error) => {
                 if !reported_disconnect {
                     log::warn!(

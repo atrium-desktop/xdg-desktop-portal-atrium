@@ -233,7 +233,7 @@ pub(crate) fn clean_staging() {
 /// Dispatch wallpaper requests independently so one open preview cannot
 /// head-of-line block another application's request.
 pub(crate) fn wallpaper_worker(
-    rx: mpsc::Receiver<WallpaperJob>,
+    rx: &mpsc::Receiver<WallpaperJob>,
     tracker: Arc<Mutex<RequestTracker>>,
     socket: PathBuf,
 ) {

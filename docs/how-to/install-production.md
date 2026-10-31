@@ -2,12 +2,24 @@
 
 ## Install Dependencies
 
-Install Rust 1.88 or newer, `pkg-config`, the optics C
-libraries (flux, lens, and iris from the tagged `ming2k/optics` release),
-`xdg-desktop-portal`,
-WirePlumber, and `xdg-email`. Inhibit additionally uses logind and Print
-uses the CUPS `lp` client at runtime; both are ordinary session services,
-not build dependencies.
+Install Rust 1.88 or newer, `pkg-config`, the PipeWire development packages
+(`libpipewire-0.3-dev`, `libspa-0.2-dev`), and `xdg-desktop-portal`.
+
+Runtime components, none of which is a build dependency:
+
+| Component | Needed for | Without it |
+|---|---|---|
+| **arca** | the `FileChooser` dialog (`arca --chooser-prompt`) | `FileChooser` answers failure code 2 and logs that arca was not found |
+| **Tessera** (protocol ≥ 24) | every compositor-owned function; prompts need 14/16 | the affected interfaces answer failure code 2 |
+| **sigil** | the `Secret` portal | `Secret` requests fail |
+| **WirePlumber** | `ScreenCast` streams | `ScreenCast.Start` fails |
+| `xdg-email` | the `Email` portal hand-off | `Email` fails |
+| logind | `Inhibit` | `Inhibit` fails |
+| CUPS `lp` | `Print` | `Print` fails |
+
+`arca` is located via `$ATRIUM_FILE_CHOOSER_PROMPTER`, a sibling of the daemon,
+`PATH`, then `/usr/local/bin` and `/usr/bin`. Install it in `PATH` for a
+standard deployment.
 
 Install a Tessera runtime that implements the protocol version in the
 [Compatibility Reference](../reference/compatibility.md). The Portal build

@@ -182,7 +182,7 @@ fn validate_request(request: &FileChooserRequest) -> Result<(), String> {
 /// to one calling application and must not block unrelated portal clients or
 /// delay cancellation of a queued request.
 pub(crate) fn file_chooser_worker(
-    rx: mpsc::Receiver<FileChooserJob>,
+    rx: &mpsc::Receiver<FileChooserJob>,
     tracker: Arc<Mutex<RequestTracker>>,
 ) {
     struct ActiveGuard(Arc<std::sync::atomic::AtomicUsize>);

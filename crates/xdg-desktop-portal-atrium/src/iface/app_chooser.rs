@@ -282,7 +282,7 @@ fn note_embedded_choices(options: &HashMap<String, Value<'_>>) {
 /// Dispatch chooser dialogs independently so one application leaving the
 /// dialog open cannot head-of-line block every other AppChooser request.
 pub(crate) fn app_chooser_worker(
-    rx: mpsc::Receiver<AppChooserJob>,
+    rx: &mpsc::Receiver<AppChooserJob>,
     tracker: Arc<Mutex<RequestTracker>>,
 ) {
     const MAX_ACTIVE_APP_CHOOSERS: usize = 32;

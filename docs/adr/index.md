@@ -29,3 +29,4 @@
 | [0025](0025-workspace-crate-topology.md) | Workspace crate topology | Accepted |
 | [0026](0026-prompter-process-retirement.md) | Prompter process retirement and companion prompt ownership | Accepted (supersedes the compatibility carve-out in [0021](0021-headless-portal-and-optics-retirement.md)) |
 | [0027](0027-arca-chooser-contract-crate.md) | The arca FileChooser contract crate | Accepted |
+| [0028](0028-supervised-workers-and-test-isolation.md) | Supervised interface workers and hermetic test processes | Accepted |

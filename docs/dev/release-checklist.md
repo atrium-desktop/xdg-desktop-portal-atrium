@@ -59,6 +59,18 @@ DESTDIR="$PWD/stage" ./scripts/install.sh --prefix /usr --no-build
 Confirm executable modes, the configured D-Bus `Exec` path, and the portal
 metadata interface list before publishing artifacts.
 
+## Process Hygiene
+
+1. Run `cargo nextest run --workspace` twice and confirm the `dbus-daemon`
+   count is unchanged afterwards (see
+   [Test Process Hygiene](test-process-hygiene.md)). A leak only shows up under
+   a full parallel run, so a single green run is not evidence.
+2. Confirm no `D`-state `wireplumber`/`pipewire` process remains from earlier
+   runs; one wedged in uninterruptible audio I/O cannot be killed and will
+   degrade every later PipeWire test until reboot.
+3. Confirm every skipped test names a reason and that no skip is masking a
+   required dependency in the target environment.
+
 ## Release Metadata
 
 1. Move the `CHANGELOG.md` Unreleased entries into the release version and

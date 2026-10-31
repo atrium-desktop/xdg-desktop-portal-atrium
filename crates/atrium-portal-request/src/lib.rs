@@ -1,5 +1,5 @@
-//! `org.freedesktop.impl.portal.Request` objects and their cancellation
-//! bookkeeping.
+//! `org.freedesktop.impl.portal.Request` objects, their cancellation
+//! bookkeeping, and the supervised job queue their workers run on.
 //!
 //! The portal frontend passes the exact object path in each backend method's
 //! `handle` argument. The backend exports one object at that path for the
@@ -14,6 +14,9 @@ use std::sync::{Arc, Mutex};
 use zbus::zvariant::Value;
 
 pub mod sync;
+pub mod worker;
+
+pub use worker::{MAX_QUEUED_REQUESTS, Supervisor};
 
 pub type PortalResults = std::collections::HashMap<String, Value<'static>>;
 pub type PortalResponse = (u32, PortalResults);
