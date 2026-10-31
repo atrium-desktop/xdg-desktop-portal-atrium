@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-arca-contract"
-version = "0.0.37"
+version = "0.0.38"
 dependencies = [
  "serde",
  "serde_json",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-apps"
-version = "0.0.37"
+version = "0.0.38"
 dependencies = [
  "log",
  "rand",
@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-cast"
-version = "0.0.37"
+version = "0.0.38"
 dependencies = [
  "atrium-portal-ipc",
  "libc",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-ipc"
-version = "0.0.37"
+version = "0.0.38"
 dependencies = [
  "libc",
  "serde",
@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-request"
-version = "0.0.37"
+version = "0.0.38"
 dependencies = [
  "async-channel",
  "libc",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "atrium-portal-secret"
-version = "0.0.37"
+version = "0.0.38"
 dependencies = [
  "atrium-portal-request",
  "libc",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "xdg-desktop-portal-atrium"
-version = "0.0.37"
+version = "0.0.38"
 dependencies = [
  "async-channel",
  "atrium-arca-contract",

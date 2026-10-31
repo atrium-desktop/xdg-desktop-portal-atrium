@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.38] - 2026-10-31
+
 ### Security
 
 - **`app_id` can no longer be forged by calling the backend directly.** Every
@@ -1063,7 +1065,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.37...HEAD
+[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.38...HEAD
+[0.0.38]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.37...v0.0.38
 [0.0.37]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.36...v0.0.37
 [0.0.36]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.35...v0.0.36
 [0.0.35]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.34...v0.0.35
