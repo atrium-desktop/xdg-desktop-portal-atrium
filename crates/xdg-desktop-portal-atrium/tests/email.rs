@@ -14,10 +14,10 @@ use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use zbus::blocking::Proxy;
-use zbus::zvariant::{Fd, ObjectPath, OwnedObjectPath, OwnedValue, Value};
+use zbus::{Fd, ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
 
 mod common;
+use common::bus;
 use common::{
     KillOnDrop, die_with_parent, e2e_required, frontend_binary, frontend_prerequisites,
     private_bus, temp_dir, wait_for_frontend, wait_for_name,
@@ -83,7 +83,7 @@ fn compose_email_hands_off_to_the_mailer() {
     let _daemon = KillOnDrop(cmd.spawn().expect("spawn xdg-desktop-portal-atrium"));
 
     wait_for_name(&conn, PORTAL);
-    let email = Proxy::new(&conn, PORTAL, DESKTOP_PATH, IFACE).expect("email proxy");
+    let email = bus::proxy(&conn, PORTAL, DESKTOP_PATH, IFACE);
 
     // The public portal turns attachment fds into local file URIs before it
     // calls the backend. Exercise exactly that backend ABI here.
@@ -94,25 +94,30 @@ fn compose_email_hands_off_to_the_mailer() {
         payload_file.to_string_lossy().replace(' ', "%20")
     );
 
-    let mut options: HashMap<String, Value<'_>> = HashMap::new();
-    options.insert("address".to_string(), Value::from("to@example.com"));
+    let mut options: HashMap<String, Variant<'_>> = HashMap::new();
+    options.insert("address".to_string(), Variant::from("to@example.com"));
     options.insert(
         "cc".to_string(),
-        Value::from(vec!["carbon@example.com".to_string()]),
+        Variant::from(vec!["carbon@example.com".to_string()]),
     );
-    options.insert("subject".to_string(), Value::from("portal subject"));
-    options.insert("body".to_string(), Value::from("portal body"));
+    options.insert("subject".to_string(), Variant::from("portal subject"));
+    options.insert("body".to_string(), Variant::from("portal body"));
     options.insert(
         "activation_token".to_string(),
-        Value::from("test-activation-token"),
+        Variant::from("test-activation-token"),
     );
-    options.insert("attachments".to_string(), Value::from(vec![attachment_uri]));
+    options.insert(
+        "attachments".to_string(),
+        Variant::from(vec![attachment_uri]),
+    );
 
     let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1/mail1")
         .expect("request handle path");
-    let (response, _results): (u32, HashMap<String, OwnedValue>) = email
-        .call("ComposeEmail", &(handle, "dev.tessera.smoke", "", options))
-        .expect("ComposeEmail");
+    let (response, _results): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &email,
+        "ComposeEmail",
+        &(handle, "dev.tessera.smoke", "", options),
+    );
     assert_eq!(response, 0, "ComposeEmail must report success");
 
     let args = recorded_args(&record_file);
@@ -261,13 +266,12 @@ fn public_frontend_translates_attachment_fds_for_the_backend() {
         return;
     }
 
-    let email = Proxy::new(
+    let email = bus::proxy(
         &conn,
         "org.freedesktop.portal.Desktop",
         DESKTOP_PATH,
         "org.freedesktop.portal.Email",
-    )
-    .expect("public email proxy");
+    );
     let token = "atrium_email_frontend_1";
     let sender = conn
         .unique_name()
@@ -276,16 +280,13 @@ fn public_frontend_translates_attachment_fds_for_the_backend() {
         .trim_start_matches(':')
         .replace('.', "_");
     let expected_handle = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
-    let request = Proxy::new(
+    let request = bus::proxy(
         &conn,
         "org.freedesktop.portal.Desktop",
         expected_handle.as_str(),
         "org.freedesktop.portal.Request",
-    )
-    .expect("public request proxy");
-    let mut responses = request
-        .receive_signal("Response")
-        .expect("subscribe Response");
+    );
+    let mut responses = bus::run(request.receive_signal("Response")).expect("subscribe Response");
 
     let attachment_path = runtime_dir.join("frontend attachment.bin");
     std::fs::write(&attachment_path, b"through-the-real-frontend").expect("attachment payload");
@@ -293,21 +294,22 @@ fn public_frontend_translates_attachment_fds_for_the_backend() {
     // SAFETY: ownership of this raw descriptor moves exactly once.
     let attachment: Fd<'_> =
         Fd::from(unsafe { OwnedFd::from_raw_fd(attachment_file.into_raw_fd()) });
-    let mut options: HashMap<String, Value<'_>> = HashMap::new();
-    options.insert("handle_token".to_string(), Value::from(token));
-    options.insert("subject".to_string(), Value::from("frontend boundary"));
-    options.insert("attachment_fds".to_string(), Value::from(vec![attachment]));
+    let mut options: HashMap<String, Variant<'_>> = HashMap::new();
+    options.insert("handle_token".to_string(), Variant::from(token));
+    options.insert("subject".to_string(), Variant::from("frontend boundary"));
+    options.insert(
+        "attachment_fds".to_string(),
+        Variant::from(vec![attachment]),
+    );
 
-    let returned: OwnedObjectPath =
-        email
-            .call("ComposeEmail", &("", options))
-            .unwrap_or_else(|error| {
-                let log = std::fs::read_to_string(&frontend_log).unwrap_or_default();
-                panic!("public ComposeEmail failed: {error}\nfrontend log:\n{log}")
-            });
+    let returned: OwnedObjectPath = bus::try_call(&email, "ComposeEmail", &("", options))
+        .unwrap_or_else(|error| {
+            let log = std::fs::read_to_string(&frontend_log).unwrap_or_default();
+            panic!("public ComposeEmail failed: {error}\nfrontend log:\n{log}")
+        });
     assert_eq!(returned.as_str(), expected_handle);
-    let response = responses.next().expect("portal must emit Response");
-    let (code, _results): (u32, HashMap<String, OwnedValue>) =
+    let response = bus::next_signal(&mut responses);
+    let (code, _results): (u32, HashMap<String, OwnedVariant>) =
         response.body().deserialize().expect("Response body");
     if code != 0 {
         let backend_log = std::fs::read_to_string(&backend_log).unwrap_or_default();

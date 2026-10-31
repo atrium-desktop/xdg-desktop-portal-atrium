@@ -37,7 +37,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use zbus::zvariant::{ObjectPath, OwnedFd, Value};
+use zbus::{ObjectPath, OwnedFd, Variant};
 
 use atrium_portal_request::{RequestTracker, sync};
 
@@ -65,7 +65,7 @@ pub(crate) trait SystemInhibitor: Send + Sync {
 /// the system bus. The connection is established lazily so the portal
 /// starts on machines without a system bus (calls then fail honestly).
 pub(crate) struct Logind {
-    conn: Mutex<Option<zbus::blocking::Connection>>,
+    conn: Mutex<Option<zbus::Connection>>,
 }
 
 impl Logind {
@@ -80,7 +80,7 @@ impl SystemInhibitor for Logind {
     fn inhibit(&self, what: &str, who: &str, why: &str, mode: &str) -> Result<OwnedFd, String> {
         let mut guard = sync::lock(&self.conn, "logind connection");
         if guard.is_none() {
-            let conn = zbus::blocking::Connection::system()
+            let conn = atrium_portal_request::block_on(zbus::Connection::system())
                 .map_err(|error| format!("system bus unavailable: {error}"))?;
             *guard = Some(conn);
         }
@@ -89,13 +89,13 @@ impl SystemInhibitor for Logind {
         let conn = guard
             .as_ref()
             .expect("logind connection stored under the same lock");
-        let reply = conn.call_method(
+        let reply = atrium_portal_request::block_on(conn.call_method(
             Some("org.freedesktop.login1"),
             "/org/freedesktop/login1",
             Some("org.freedesktop.login1.Manager"),
             "Inhibit",
             &(what, who, why, mode),
-        );
+        ));
         match reply {
             Ok(reply) => reply
                 .body()
@@ -227,7 +227,7 @@ fn apply_inhibit(
 }
 
 /// The `reason` option, bounded and NUL-free.
-fn parse_reason(options: &HashMap<String, Value<'_>>) -> Result<Option<String>, String> {
+fn parse_reason(options: &HashMap<String, Variant<'_>>) -> Result<Option<String>, String> {
     match options
         .get("reason")
         .and_then(|value| String::try_from(value).ok())
@@ -267,7 +267,7 @@ impl InhibitIface {
         app_id: &str,
         _window: &str,
         flags: u32,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<()> {
         let path = handle.as_str().to_string();
         log::info!("portal: Inhibit for '{app_id}' at {path} (flags {flags:#x})");
@@ -298,7 +298,7 @@ impl InhibitIface {
             )
             .await
             .map_err(zbus::fdo::Error::from)?;
-        if !inserted {
+        if inserted.is_some() {
             sync::lock(&self.registry, "inhibit registry").remove_request(&path);
             return Err(zbus::fdo::Error::Failed(format!(
                 "request handle {path} is already active"
@@ -369,13 +369,13 @@ impl InhibitIface {
             )
             .await
             .map_err(zbus::fdo::Error::from)?;
-        if !inserted {
+        if inserted.is_some() {
             sync::lock(&self.registry, "inhibit registry").remove_monitor(session_path);
             return Ok(2);
         }
         // The one truthful state this stack can report: Running. Nothing
         // else ever follows (no session manager).
-        let state = HashMap::from([("session-state".to_owned(), Value::from(1u32))]);
+        let state = HashMap::from([("session-state".to_owned(), Variant::from(1u32))]);
         let session = ObjectPath::try_from(session_path)
             .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
         if let Err(error) = self
@@ -609,12 +609,12 @@ mod tests {
 
     #[test]
     fn reason_option_is_bounded() {
-        let options = HashMap::from([("reason".to_owned(), Value::from("Because"))]);
+        let options = HashMap::from([("reason".to_owned(), Variant::from("Because"))]);
         assert_eq!(parse_reason(&options).unwrap().as_deref(), Some("Because"));
         assert!(parse_reason(&HashMap::new()).unwrap().is_none());
         let oversized = HashMap::from([(
             "reason".to_owned(),
-            Value::from("x".repeat(MAX_REASON_BYTES + 1)),
+            Variant::from("x".repeat(MAX_REASON_BYTES + 1)),
         )]);
         assert!(parse_reason(&oversized).is_err());
     }

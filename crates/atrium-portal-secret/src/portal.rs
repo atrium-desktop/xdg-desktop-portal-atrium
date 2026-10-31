@@ -18,14 +18,14 @@ use std::sync::{Arc, Mutex};
 use crate::native::{NativeError, SigilConnection};
 use atrium_portal_request::RequestTracker;
 use atrium_portal_request::sync;
-use zbus::zvariant::{Fd, ObjectPath, Value};
+use zbus::{Fd, ObjectPath, Variant};
 
 /// The served interface version.
 pub(crate) const SECRET_VERSION: u32 = 1;
 
 /// The served secret interface.
 pub(crate) struct SecretIface {
-    pub(crate) conn: zbus::blocking::Connection,
+    pub(crate) conn: zbus::Connection,
     pub(crate) tracker: Arc<Mutex<RequestTracker>>,
 }
 
@@ -38,14 +38,14 @@ impl SecretIface {
         handle: ObjectPath<'_>,
         app_id: String,
         fd: Fd<'_>,
-        _options: HashMap<String, Value<'_>>,
-    ) -> zbus::fdo::Result<(u32, HashMap<String, Value<'static>>)> {
+        _options: HashMap<String, Variant<'_>>,
+    ) -> zbus::fdo::Result<(u32, HashMap<String, Variant<'static>>)> {
         let path = handle.as_str().to_string();
         log::info!("portal: RetrieveSecret for '{app_id}' at {path}");
 
-        atrium_portal_request::register(self.conn.inner(), &self.tracker, &path).await?;
+        atrium_portal_request::register(&self.conn, &self.tracker, &path).await?;
         let response = self.run(&path, &app_id, fd).await;
-        atrium_portal_request::finish(self.conn.inner(), &self.tracker, &path).await;
+        atrium_portal_request::finish(&self.conn, &self.tracker, &path).await;
         response
     }
 
@@ -61,7 +61,7 @@ impl SecretIface {
         path: &str,
         app_id: &str,
         fd: Fd<'_>,
-    ) -> zbus::fdo::Result<(u32, HashMap<String, Value<'static>>)> {
+    ) -> zbus::fdo::Result<(u32, HashMap<String, Variant<'static>>)> {
         if sync::lock(&self.tracker, "secret tracker").was_closed(path) {
             log::info!("portal: RetrieveSecret at {path} cancelled by Request.Close");
             return Ok((1, HashMap::new()));

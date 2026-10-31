@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 
-use zbus::zvariant::{ObjectPath, Value};
+use zbus::{ObjectPath, Variant};
 
 use atrium_portal_request::{PortalResponse, RequestTracker, ResponseSender, sync};
 
@@ -74,7 +74,7 @@ impl BackgroundIface {
         app_id: &str,
         parent_window: &str,
         reason: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let path = handle.as_str().to_string();
         log::info!("portal: RequestBackground for '{app_id}' at {path}");
@@ -116,7 +116,7 @@ fn parse_request(
     app_id: &str,
     parent_window: &str,
     reason: &str,
-    options: &HashMap<String, Value<'_>>,
+    options: &HashMap<String, Variant<'_>>,
 ) -> Result<(crate::ipc::ConsentPrompt, Option<AutostartSpec>), String> {
     if app_id.is_empty()
         || app_id.len() > MAX_APP_ID_BYTES
@@ -266,10 +266,10 @@ fn write_autostart_entry(
 }
 
 /// The results dictionary for a grant.
-fn results(autostart: bool) -> HashMap<String, Value<'static>> {
+fn results(autostart: bool) -> HashMap<String, Variant<'static>> {
     HashMap::from([
-        ("background".to_owned(), Value::from(true)),
-        ("autostart".to_owned(), Value::from(autostart)),
+        ("background".to_owned(), Variant::from(true)),
+        ("autostart".to_owned(), Variant::from(autostart)),
     ])
 }
 
@@ -327,7 +327,7 @@ fn run_request(
     app_id: &str,
     prompt: crate::ipc::ConsentPrompt,
     autostart: Option<AutostartSpec>,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     if sync::lock(tracker, "background tracker").was_closed(request_path) {
         return (1, HashMap::new());
     }
@@ -392,7 +392,7 @@ fn write_autostart(app_id: &str, spec: &AutostartSpec) -> bool {
 mod tests {
     use super::*;
 
-    fn options(pairs: &[(&str, Value<'static>)]) -> HashMap<String, Value<'static>> {
+    fn options(pairs: &[(&str, Variant<'static>)]) -> HashMap<String, Variant<'static>> {
         pairs
             .iter()
             .map(|(key, value)| ((*key).to_owned(), value.clone()))
@@ -424,7 +424,7 @@ mod tests {
             "org.foo.Bar",
             "",
             "",
-            &options(&[("autostart", Value::from(true))]),
+            &options(&[("autostart", Variant::from(true))]),
         )
         .unwrap();
         assert!(autostart.is_none());
@@ -434,11 +434,11 @@ mod tests {
             "",
             "",
             &options(&[
-                ("autostart", Value::from(true)),
-                ("dbus-activatable", Value::from(true)),
+                ("autostart", Variant::from(true)),
+                ("dbus-activatable", Variant::from(true)),
                 (
                     "commandline",
-                    Value::from(vec!["foo".to_owned(), "--flag".to_owned()]),
+                    Variant::from(vec!["foo".to_owned(), "--flag".to_owned()]),
                 ),
             ]),
         )
@@ -453,14 +453,14 @@ mod tests {
 
         let oversized = options(&[(
             "commandline",
-            Value::from(vec!["x".repeat(MAX_ARG_BYTES + 1)]),
+            Variant::from(vec!["x".repeat(MAX_ARG_BYTES + 1)]),
         )]);
         assert!(parse_request("org.foo.Bar", "", "", &oversized).is_err());
-        let empty_arg = options(&[("commandline", Value::from(vec![String::new()]))]);
+        let empty_arg = options(&[("commandline", Variant::from(vec![String::new()]))]);
         assert!(parse_request("org.foo.Bar", "", "", &empty_arg).is_err());
         let too_many = options(&[(
             "commandline",
-            Value::from(vec!["x".to_owned(); MAX_COMMANDLINE_ARGS + 1]),
+            Variant::from(vec!["x".to_owned(); MAX_COMMANDLINE_ARGS + 1]),
         )]);
         assert!(parse_request("org.foo.Bar", "", "", &too_many).is_err());
     }
@@ -546,9 +546,9 @@ mod tests {
     #[test]
     fn grant_results_report_both_flags() {
         let granted = results(true);
-        assert_eq!(granted["background"], Value::from(true));
-        assert_eq!(granted["autostart"], Value::from(true));
+        assert_eq!(granted["background"], Variant::from(true));
+        assert_eq!(granted["autostart"], Variant::from(true));
         let background_only = results(false);
-        assert_eq!(background_only["autostart"], Value::from(false));
+        assert_eq!(background_only["autostart"], Variant::from(false));
     }
 }

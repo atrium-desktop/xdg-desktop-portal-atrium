@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, mpsc};
 
-use zbus::zvariant::{ObjectPath, Value};
+use zbus::{ObjectPath, Variant};
 
 use crate::ipc::{self, Consent};
 use atrium_portal_request::{PortalResponse, RequestTracker, ResponseSender, sync};
@@ -55,7 +55,7 @@ impl AccessIface {
         title: &str,
         subtitle: &str,
         body: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let path = handle.as_str().to_string();
         log::info!("portal: AccessDialog for '{app_id}' at {path}");
@@ -98,7 +98,7 @@ fn dialog_request(
     title: &str,
     subtitle: &str,
     body: &str,
-    options: &HashMap<String, Value<'_>>,
+    options: &HashMap<String, Variant<'_>>,
 ) -> Result<ipc::ConsentPrompt, String> {
     for (name, text) in [("title", title), ("subtitle", subtitle), ("body", body)] {
         if text.len() > MAX_DIALOG_TEXT_BYTES || text.contains('\0') {
@@ -195,7 +195,7 @@ fn run_dialog(
     request_path: &str,
     app_id: &str,
     prompt: ipc::ConsentPrompt,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     if sync::lock(tracker, "access tracker").was_closed(request_path) {
         return (1, HashMap::new());
     }
@@ -260,16 +260,16 @@ mod tests {
         // `deny_label` or `modality` hint is accepted but has no rendering
         // home (ADR-0026), so only the grant label reaches the prompt.
         let options = HashMap::from([
-            ("deny_label".to_owned(), Value::from("_Deny")),
-            ("grant_label".to_owned(), Value::from("_Allow")),
-            ("modality".to_owned(), Value::from(false)),
+            ("deny_label".to_owned(), Variant::from("_Deny")),
+            ("grant_label".to_owned(), Variant::from("_Allow")),
+            ("modality".to_owned(), Variant::from(false)),
         ]);
         let prompt = dialog_request("", "Title", "", "", &options).unwrap();
         assert_eq!(prompt.accept_label.as_deref(), Some("_Allow"));
 
         let oversized = HashMap::from([(
             "grant_label".to_owned(),
-            Value::from("x".repeat(MAX_LABEL_BYTES + 1)),
+            Variant::from("x".repeat(MAX_LABEL_BYTES + 1)),
         )]);
         assert!(dialog_request("", "Title", "", "", &oversized).is_err());
     }

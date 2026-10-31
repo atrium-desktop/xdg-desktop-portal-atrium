@@ -8,10 +8,10 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use zbus::blocking::Proxy;
-use zbus::zvariant::{Fd, ObjectPath, OwnedObjectPath, Value};
+use zbus::{Fd, ObjectPath, OwnedObjectPath, Variant};
 
 mod common;
+use common::bus;
 use common::{
     FakeSigil, FakeSigilResponse, KillOnDrop, die_with_parent, e2e_required, frontend_binary,
     frontend_prerequisites, pipe_pair, private_bus, read_all_with_timeout, spawn_daemon, temp_dir,
@@ -37,16 +37,13 @@ fn native_secret_portal_end_to_end() {
     let _daemon = KillOnDrop(spawn_daemon(&bus, &data_dir, &runtime_dir));
     wait_for_name(&conn, PORTAL);
 
-    let fdo = Proxy::new(
+    let fdo = bus::proxy(
         &conn,
         "org.freedesktop.DBus",
         "/org/freedesktop/DBus",
         "org.freedesktop.DBus",
-    )
-    .expect("D-Bus proxy");
-    let compat_owned: bool = fdo
-        .call("NameHasOwner", &("org.freedesktop.secrets",))
-        .expect("NameHasOwner");
+    );
+    let compat_owned: bool = bus::call(&fdo, "NameHasOwner", &("org.freedesktop.secrets",));
     assert!(
         !compat_owned,
         "the backend must not claim an incomplete Secret Service API"
@@ -59,14 +56,13 @@ fn native_secret_portal_end_to_end() {
         "packaging must not activate the removed compatibility API"
     );
 
-    let portal = Proxy::new(
+    let portal = bus::proxy(
         &conn,
         PORTAL,
         DESKTOP_PATH,
         "org.freedesktop.impl.portal.Secret",
-    )
-    .expect("portal secret proxy");
-    let version: u32 = portal.get_property("version").expect("version property");
+    );
+    let version: u32 = bus::run(portal.get_property("version")).expect("version property");
     assert_eq!(version, 1);
 
     for (interface, expected) in [
@@ -74,20 +70,18 @@ fn native_secret_portal_end_to_end() {
         ("org.freedesktop.impl.portal.Screenshot", 3),
         ("org.freedesktop.impl.portal.ScreenCast", 6),
     ] {
-        let proxy = Proxy::new(&conn, PORTAL, DESKTOP_PATH, interface).expect("backend proxy");
-        let version: u32 = proxy
-            .get_property("version")
+        let proxy = bus::proxy(&conn, PORTAL, DESKTOP_PATH, interface);
+        let version: u32 = bus::run(proxy.get_property("version"))
             .unwrap_or_else(|error| panic!("{interface} must expose version: {error}"));
         assert_eq!(version, expected, "{interface} version");
     }
 
-    let lockdown = Proxy::new(
+    let lockdown = bus::proxy(
         &conn,
         PORTAL,
         DESKTOP_PATH,
         "org.freedesktop.impl.portal.Lockdown",
-    )
-    .expect("lockdown proxy");
+    );
     for property in [
         "disable-printing",
         "disable-save-to-disk",
@@ -97,38 +91,31 @@ fn native_secret_portal_end_to_end() {
         "disable-microphone",
         "disable-sound-output",
     ] {
-        let restricted: bool = lockdown
-            .get_property(property)
+        let restricted: bool = bus::run(lockdown.get_property(property))
             .unwrap_or_else(|error| panic!("Lockdown must expose {property}: {error}"));
         assert!(!restricted, "Lockdown {property} must be permissive");
     }
-    lockdown
-        .set_property("disable-printing", true)
+    bus::run(lockdown.set_property("disable-printing", true))
         .expect("Lockdown property must be writable");
     // Read through a fresh proxy so this checks the service rather than the
     // first proxy's property cache racing the PropertiesChanged signal.
-    let lockdown_after_set = Proxy::new(
+    let lockdown_after_set = bus::proxy(
         &conn,
         PORTAL,
         DESKTOP_PATH,
         "org.freedesktop.impl.portal.Lockdown",
-    )
-    .expect("fresh lockdown proxy");
-    let printing_disabled: bool = lockdown_after_set
-        .get_property("disable-printing")
+    );
+    let printing_disabled: bool = bus::run(lockdown_after_set.get_property("disable-printing"))
         .expect("updated Lockdown property");
     assert!(printing_disabled);
 
-    let introspectable = Proxy::new(
+    let introspectable = bus::proxy(
         &conn,
         PORTAL,
         DESKTOP_PATH,
         "org.freedesktop.DBus.Introspectable",
-    )
-    .expect("introspection proxy");
-    let xml: String = introspectable
-        .call("Introspect", &())
-        .expect("backend introspection");
+    );
+    let xml: String = bus::call(&introspectable, "Introspect", &());
     for interface in ["Account", "Email", "FileChooser"] {
         let section = interface_section(&xml, interface);
         assert!(
@@ -147,17 +134,16 @@ fn native_secret_portal_end_to_end() {
     let fd: Fd<'_> = Fd::from(write_end);
     let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1/smoke")
         .expect("request handle path");
-    let (response, _results): (u32, HashMap<String, zbus::zvariant::OwnedValue>) = portal
-        .call(
-            "RetrieveSecret",
-            &(
-                handle,
-                "dev.tessera.smoke",
-                fd,
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("RetrieveSecret");
+    let (response, _results): (u32, HashMap<String, zbus::zvariant::OwnedVariant>) = bus::call(
+        &portal,
+        "RetrieveSecret",
+        &(
+            handle,
+            "dev.tessera.smoke",
+            fd,
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
     assert_eq!(response, 0, "RetrieveSecret must report success");
 
     let delivered = read_all_with_timeout(read_end, Duration::from_secs(5));
@@ -295,13 +281,12 @@ fn public_frontend_delivers_the_native_secret() {
         return;
     }
 
-    let secret = Proxy::new(
+    let secret = bus::proxy(
         &conn,
         "org.freedesktop.portal.Desktop",
         DESKTOP_PATH,
         "org.freedesktop.portal.Secret",
-    )
-    .expect("public Secret proxy");
+    );
     let token = "atrium_secret_frontend_1";
     let sender = conn
         .unique_name()
@@ -310,29 +295,25 @@ fn public_frontend_delivers_the_native_secret() {
         .trim_start_matches(':')
         .replace('.', "_");
     let expected_handle = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
-    let request = Proxy::new(
+    let request = bus::proxy(
         &conn,
         "org.freedesktop.portal.Desktop",
         expected_handle.as_str(),
         "org.freedesktop.portal.Request",
-    )
-    .expect("public request proxy");
-    let mut responses = request
-        .receive_signal("Response")
-        .expect("subscribe Response");
+    );
+    let mut responses = bus::run(request.receive_signal("Response")).expect("subscribe Response");
 
     let (read_end, write_end) = pipe_pair();
     let fd: Fd<'_> = Fd::from(write_end);
-    let options = HashMap::from([("handle_token".to_owned(), Value::from(token))]);
-    let returned: OwnedObjectPath = secret
-        .call("RetrieveSecret", &(fd, options))
+    let options = HashMap::from([("handle_token".to_owned(), Variant::from(token))]);
+    let returned: OwnedObjectPath = bus::try_call(&secret, "RetrieveSecret", &(fd, options))
         .unwrap_or_else(|error| {
             let log = std::fs::read_to_string(&frontend_log).unwrap_or_default();
             panic!("public RetrieveSecret failed: {error}\nfrontend log:\n{log}")
         });
     assert_eq!(returned.as_str(), expected_handle);
-    let response = responses.next().expect("portal must emit Response");
-    let (code, _results): (u32, HashMap<String, zbus::zvariant::OwnedValue>) =
+    let response = bus::next_signal(&mut responses);
+    let (code, _results): (u32, HashMap<String, zbus::zvariant::OwnedVariant>) =
         response.body().deserialize().expect("Response body");
     if code != 0 {
         let backend_log = std::fs::read_to_string(&backend_log).unwrap_or_default();

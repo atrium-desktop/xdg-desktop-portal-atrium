@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, mpsc};
 
-use zbus::zvariant::{ObjectPath, Value};
+use zbus::{ObjectPath, Variant};
 
 use crate::uri;
 use atrium_portal_request::{PortalResponse, RequestTracker, ResponseSender, sync};
@@ -50,7 +50,7 @@ impl AccountIface {
         handle: ObjectPath<'_>,
         app_id: &str,
         window: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let path = handle.as_str().to_string();
         log::info!("portal: GetUserInformation for '{app_id}' at {path}");
@@ -81,7 +81,7 @@ impl AccountIface {
     }
 }
 
-fn account_reason(options: &HashMap<String, Value<'_>>) -> Result<Option<String>, String> {
+fn account_reason(options: &HashMap<String, Variant<'_>>) -> Result<Option<String>, String> {
     let reason = options
         .get("reason")
         .and_then(|value| String::try_from(value).ok());
@@ -144,7 +144,7 @@ fn run_request(
     app_id: &str,
     parent_window: Option<String>,
     reason: Option<String>,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     if sync::lock(tracker, "account tracker").was_closed(request_path) {
         return (1, HashMap::new());
     }
@@ -187,11 +187,11 @@ fn run_request(
     let identity = Identity::current();
     log::info!("portal: GetUserInformation for '{app_id}' shared (consent given)");
     let mut results = HashMap::from([
-        ("id".to_string(), Value::from(identity.id)),
-        ("name".to_string(), Value::from(identity.name)),
+        ("id".to_string(), Variant::from(identity.id)),
+        ("name".to_string(), Variant::from(identity.name)),
     ]);
     if let Some(image) = identity.avatar_uri {
-        results.insert("image".to_string(), Value::from(image));
+        results.insert("image".to_string(), Variant::from(image));
     }
     (0, results)
 }
@@ -319,13 +319,13 @@ mod tests {
     fn account_reason_limit_is_bounded() {
         let accepted = HashMap::from([(
             "reason".to_owned(),
-            Value::from("x".repeat(MAX_REASON_BYTES)),
+            Variant::from("x".repeat(MAX_REASON_BYTES)),
         )]);
         assert!(account_reason(&accepted).is_ok());
 
         let refused = HashMap::from([(
             "reason".to_owned(),
-            Value::from("x".repeat(MAX_REASON_BYTES + 1)),
+            Variant::from("x".repeat(MAX_REASON_BYTES + 1)),
         )]);
         assert!(account_reason(&refused).is_err());
     }

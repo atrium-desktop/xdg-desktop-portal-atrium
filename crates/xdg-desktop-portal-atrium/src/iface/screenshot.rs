@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, mpsc};
 
-use zbus::zvariant::{ObjectPath, Value};
+use zbus::{ObjectPath, Variant};
 
 use crate::fsx::atomic;
 use crate::ipc::PortalCapture;
@@ -71,7 +71,7 @@ pub(crate) enum ScreenshotTarget {
 /// Parse the backend `Screenshot` options dict. Request-token handling belongs
 /// to the portal frontend; backend options contain only request policy.
 pub(crate) fn parse_options(
-    options: &HashMap<String, Value<'_>>,
+    options: &HashMap<String, Variant<'_>>,
 ) -> Result<ScreenshotOptions, String> {
     let interactive = options
         .get("interactive")
@@ -144,7 +144,7 @@ impl ScreenshotIface {
         handle: ObjectPath<'_>,
         app_id: &str,
         _parent_window: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let options = match parse_options(&options) {
             Ok(options) => options,
@@ -185,7 +185,7 @@ impl ScreenshotIface {
         handle: ObjectPath<'_>,
         app_id: &str,
         _parent_window: &str,
-        _options: HashMap<String, Value<'_>>,
+        _options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let path = handle.as_str().to_string();
         log::info!("portal: PickColor for '{app_id}' at {path}");
@@ -276,7 +276,7 @@ fn run_job(
     capture: &mut PortalCapture,
     tracker: &Arc<Mutex<RequestTracker>>,
     job: &CaptureJob,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     match job {
         CaptureJob::Screenshot {
             request_path,
@@ -343,7 +343,7 @@ fn run_job(
                         return (1, HashMap::new());
                     }
                     log::info!("portal: screenshot for '{app_id}' → {uri}");
-                    (0, HashMap::from([("uri".to_string(), Value::from(uri))]))
+                    (0, HashMap::from([("uri".to_string(), Variant::from(uri))]))
                 }
                 Err(error) => {
                     log::warn!("portal: screenshot for '{app_id}' failed: {error}");
@@ -387,8 +387,8 @@ fn run_job(
 }
 
 /// The PickColor `color` result: `(ddd)` red/green/blue as 0–1 doubles.
-fn color_value(rgb: [u8; 3]) -> Value<'static> {
-    Value::Structure(zbus::zvariant::Structure::from((
+fn color_value(rgb: [u8; 3]) -> Variant<'static> {
+    Variant::Structure(zbus::Structure::from((
         f64::from(rgb[0]) / 255.0,
         f64::from(rgb[1]) / 255.0,
         f64::from(rgb[2]) / 255.0,
@@ -474,7 +474,7 @@ fn capture_and_write(
 mod tests {
     use super::*;
 
-    fn options(pairs: &[(&str, Value<'static>)]) -> HashMap<String, Value<'static>> {
+    fn options(pairs: &[(&str, Variant<'static>)]) -> HashMap<String, Variant<'static>> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
@@ -491,25 +491,28 @@ mod tests {
 
     #[test]
     fn options_parse_interactive() {
-        let parsed = parse_options(&options(&[("interactive", Value::from(true))])).unwrap();
+        let parsed = parse_options(&options(&[("interactive", Variant::from(true))])).unwrap();
         assert!(parsed.interactive);
     }
 
     #[test]
     fn wrong_typed_options_are_ignored() {
-        let parsed = parse_options(&options(&[("interactive", Value::from("yes"))])).unwrap();
+        let parsed = parse_options(&options(&[("interactive", Variant::from("yes"))])).unwrap();
         assert!(!parsed.interactive);
     }
 
     #[test]
     fn area_target_is_supported_and_unadvertised_targets_are_rejected() {
-        let parsed =
-            parse_options(&options(&[("target", Value::from(SCREENSHOT_TARGET_AREA))])).unwrap();
+        let parsed = parse_options(&options(&[(
+            "target",
+            Variant::from(SCREENSHOT_TARGET_AREA),
+        )]))
+        .unwrap();
         assert_eq!(parsed.target, Some(ScreenshotTarget::Area));
 
         for target in [1_u32, 2, 8, 3] {
             assert!(
-                parse_options(&options(&[("target", Value::from(target))])).is_err(),
+                parse_options(&options(&[("target", Variant::from(target))])).is_err(),
                 "target {target} must not be accepted unless advertised"
             );
         }
@@ -517,13 +520,16 @@ mod tests {
 
     #[test]
     fn permission_store_hint_is_parsed_fail_closed() {
-        let checked =
-            parse_options(&options(&[("permission_store_checked", Value::from(true))])).unwrap();
+        let checked = parse_options(&options(&[(
+            "permission_store_checked",
+            Variant::from(true),
+        )]))
+        .unwrap();
         assert!(checked.permission_store_checked);
 
         let wrong_type = parse_options(&options(&[(
             "permission_store_checked",
-            Value::from("yes"),
+            Variant::from("yes"),
         )]))
         .unwrap();
         assert!(!wrong_type.permission_store_checked);
@@ -601,7 +607,7 @@ mod tests {
             "(ddd)",
             "the spec's color result is a (ddd) structure"
         );
-        let Value::Structure(structure) = &value else {
+        let Variant::Structure(structure) = &value else {
             panic!("color must be a structure");
         };
         let fields = structure.fields();

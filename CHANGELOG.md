@@ -15,6 +15,27 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Migrated to zbus 6 ([ADR-0029](docs/adr/0029-zbus-6-migration.md)).**
+  `cargo deny check` reported three unmaintained advisories
+  (RUSTSEC-2026-0370/0371/0372) against `zvariant`, `zvariant_derive`, and
+  `zbus_names`. Their remedy is the zbus 6 upgrade: those crates were absorbed
+  into `zbus` and receive no further fixes as standalone packages. The workspace
+  now depends on one D-Bus family instead of four, and `cargo deny` reports
+  `advisories ok` with no ignore list.
+  - zbus 6 removed the blocking API, so the daemon gains
+    `atrium_portal_request::driver`: one thread per connection stays in
+    `block_on` for the process lifetime, and synchronous interface methods hand
+    work to it. A per-call `block_on` would deadlock, because an interface
+    method runs *inside* the connection it would wait for.
+  - `Value` became `Variant` and `OwnedValue` became `OwnedVariant`; the
+    deprecated `zbus::zvariant` alias is not used.
+  - Integration tests use a client-side facade (`tests/common/bus.rs`), which
+    is the correct shape for callers rather than servers.
+- **MSRV is now Rust 1.89**, which zbus 6 requires. CI, the install guide, the
+  release checklist, and the compatibility reference move together.
+
 ## [0.0.36] - 2026-10-31
 
 ### Fixed

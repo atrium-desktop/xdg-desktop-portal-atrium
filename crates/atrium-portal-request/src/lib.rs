@@ -11,14 +11,16 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use zbus::zvariant::Value;
+use zbus::Variant;
 
+pub mod driver;
 pub mod sync;
 pub mod worker;
 
+pub use driver::{Driver, block_on};
 pub use worker::{MAX_QUEUED_REQUESTS, Supervisor};
 
-pub type PortalResults = std::collections::HashMap<String, Value<'static>>;
+pub type PortalResults = std::collections::HashMap<String, Variant<'static>>;
 pub type PortalResponse = (u32, PortalResults);
 pub type ResponseSender = async_channel::Sender<PortalResponse>;
 
@@ -90,7 +92,10 @@ pub async fn register(
     tracker: &Arc<Mutex<RequestTracker>>,
     path: &str,
 ) -> zbus::fdo::Result<()> {
-    let inserted = conn
+    // zbus 6 returns the *previous* interface at that path, if any: `Some`
+    // means the handle was already active, which is a protocol error rather
+    // than an opportunity to share cancellation state between two calls.
+    let previous = conn
         .object_server()
         .at(
             path,
@@ -101,7 +106,7 @@ pub async fn register(
         )
         .await
         .map_err(zbus::fdo::Error::from)?;
-    if !inserted {
+    if previous.is_some() {
         return Err(zbus::fdo::Error::Failed(format!(
             "request handle {path} is already active"
         )));
@@ -280,12 +285,9 @@ mod tests {
     }
 
     fn connect(bus: &PrivateBus) -> zbus::Connection {
-        zbus::block_on(async {
-            zbus::connection::Builder::address(bus.address.as_str())?
-                .build()
-                .await
-        })
-        .expect("connect to the private bus")
+        // zbus 6's address builder is infallible; only `build` reports.
+        let builder = zbus::connection::Builder::address(bus.address.as_str());
+        zbus::block_on(async { builder.build().await }).expect("connect to the private bus")
     }
 
     #[test]

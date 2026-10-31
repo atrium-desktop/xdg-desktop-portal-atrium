@@ -12,10 +12,10 @@ use std::sync::Arc;
 
 use atrium_portal_ipc::testing::{Handler, Server};
 use atrium_portal_ipc::{AccentColor, ColorScheme, Contrast, DesktopPreferences, SettingsSnapshot};
-use zbus::blocking::Proxy;
-use zbus::zvariant::OwnedValue;
+use zbus::OwnedVariant;
 
 mod common;
+use common::bus;
 use common::{KillOnDrop, daemon_command, private_bus, temp_dir, wait_for_name};
 
 const PORTAL: &str = "org.freedesktop.impl.portal.desktop.atrium";
@@ -47,11 +47,9 @@ impl Handler for LightCompositor {
 
 /// Read one appearance key through the backend interface. The *backend*
 /// method is `Read`; `ReadOne` exists only on the frontend facade.
-fn read(conn: &zbus::blocking::Connection, key: &str) -> OwnedValue {
-    let settings = Proxy::new(conn, PORTAL, DESKTOP_PATH, IFACE).expect("settings proxy");
-    settings
-        .call("Read", &(APPEARANCE, key))
-        .unwrap_or_else(|error| panic!("Read({key}) must succeed: {error}"))
+fn read(conn: &zbus::Connection, key: &str) -> OwnedVariant {
+    let settings = bus::proxy(conn, PORTAL, DESKTOP_PATH, IFACE);
+    bus::call(&settings, "Read", &(APPEARANCE, key))
 }
 
 #[test]
@@ -64,8 +62,7 @@ fn preferences_reach_the_settings_projection() {
 
     let data_dir = temp_dir("appearance-data");
     let runtime_dir = temp_dir("appearance-runtime");
-    let _server = Server::start(&runtime_dir.join("tessera.sock"), Arc::new(LightCompositor))
-        .expect("start fake compositor");
+    let _server = Server::start(&runtime_dir.join("tessera.sock"), Arc::new(LightCompositor));
 
     let _daemon = KillOnDrop(
         daemon_command(&bus, &data_dir, &runtime_dir)

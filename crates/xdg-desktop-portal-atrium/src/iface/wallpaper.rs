@@ -28,7 +28,7 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 
-use zbus::zvariant::{ObjectPath, Value};
+use zbus::{ObjectPath, Variant};
 
 use crate::{atomic, ipc, uri};
 use atrium_portal_request::{RequestTracker, ResponseSender, sync};
@@ -65,7 +65,7 @@ impl WallpaperIface {
         app_id: &str,
         parent_window: &str,
         uri: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<u32> {
         let path = handle.as_str().to_string();
         log::info!("portal: SetWallpaperURI for '{app_id}' at {path}: {uri}");
@@ -107,7 +107,7 @@ impl WallpaperIface {
 /// preview flag.
 fn parse_request(
     uri: &str,
-    options: &HashMap<String, Value<'_>>,
+    options: &HashMap<String, Variant<'_>>,
 ) -> Result<(PathBuf, bool), String> {
     if uri.len() > 8 * 1024 {
         return Err("URI is oversized".to_string());
@@ -131,7 +131,7 @@ fn parse_request(
 /// Validate the `set-on` option. The compositor has a single wallpaper
 /// concept, so the value is not forwarded — but an unknown value is still
 /// refused.
-fn parse_set_on(options: &HashMap<String, Value<'_>>) -> Result<(), String> {
+fn parse_set_on(options: &HashMap<String, Variant<'_>>) -> Result<(), String> {
     match options
         .get("set-on")
         .and_then(|value| String::try_from(value).ok())
@@ -298,7 +298,7 @@ fn run_set(
     image_path: &Path,
     show_preview: bool,
     parent_window: Option<String>,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     let Some(staging) = staging_dir() else {
         log::warn!("portal: SetWallpaperURI for '{app_id}' failed: $XDG_RUNTIME_DIR is unset");
         return (2, HashMap::new());
@@ -327,7 +327,7 @@ fn run_set_staged(
     image_path: &Path,
     show_preview: bool,
     parent_window: Option<String>,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     if sync::lock(tracker, "wallpaper tracker").was_closed(request_path) {
         return (1, HashMap::new());
     }
@@ -413,7 +413,7 @@ fn preview_consent(
 mod tests {
     use super::*;
 
-    fn options(pairs: &[(&str, Value<'static>)]) -> HashMap<String, Value<'static>> {
+    fn options(pairs: &[(&str, Variant<'static>)]) -> HashMap<String, Variant<'static>> {
         pairs
             .iter()
             .map(|(key, value)| ((*key).to_owned(), value.clone()))
@@ -450,16 +450,16 @@ mod tests {
         // Every spec value passes; the compositor's single wallpaper
         // concept means the value never leaves option parsing.
         for value in ["background", "lockscreen", "both", ""] {
-            let options = options(&[("set-on", Value::from(value))]);
+            let options = options(&[("set-on", Variant::from(value))]);
             assert!(
                 parse_request("file:///tmp/w.png", &options).is_ok(),
                 "set-on={value:?}"
             );
         }
-        let bad_value = options(&[("set-on", Value::from("screensaver"))]);
+        let bad_value = options(&[("set-on", Variant::from("screensaver"))]);
         assert!(parse_request("file:///tmp/w.png", &bad_value).is_err());
 
-        let with_preview = options(&[("show-preview", Value::from(true))]);
+        let with_preview = options(&[("show-preview", Variant::from(true))]);
         let (_, preview) = parse_request("file:///tmp/w.png", &with_preview).unwrap();
         assert!(preview);
     }

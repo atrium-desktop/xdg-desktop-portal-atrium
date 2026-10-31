@@ -32,7 +32,7 @@ Do not bypass the hook.
 The root `rust-toolchain.toml` selects the `stable` channel with the
 `rustfmt` and `clippy` components, so a fresh clone builds with the same
 toolchain shape CI's main job uses. The CI MSRV job overrides the pin
-with `RUSTUP_TOOLCHAIN=1.88.0`, which outranks `rust-toolchain.toml`, so
+with `RUSTUP_TOOLCHAIN=1.89.0`, which outranks `rust-toolchain.toml`, so
 the minimum supported toolchain really runs there.
 
 ## `scripts/install.sh`

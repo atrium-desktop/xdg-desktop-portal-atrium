@@ -32,8 +32,8 @@ Run every gate from the repository root:
 
 ```bash
 cargo fmt --all -- --check
-cargo +1.88.0 check --locked --workspace --all-targets
-cargo +1.88.0 clippy --locked --workspace --all-targets -- -D warnings
+cargo +1.89.0 check --locked --workspace --all-targets
+cargo +1.89.0 clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ATRIUM_PORTAL_REQUIRE_E2E=1 \
 ATRIUM_PORTAL_REQUIRE_PIPEWIRE_E2E=1 \

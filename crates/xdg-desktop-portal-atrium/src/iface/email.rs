@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use zbus::zvariant::{ObjectPath, Value};
+use zbus::{ObjectPath, Variant};
 
 use crate::uri;
 use atrium_portal_request::{PortalResponse, RequestTracker, sync};
@@ -49,7 +49,7 @@ impl EmailIface {
         handle: ObjectPath<'_>,
         app_id: &str,
         _parent_window: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let path = handle.as_str().to_string();
         log::info!("portal: ComposeEmail for '{app_id}' at {path}");
@@ -66,7 +66,7 @@ impl EmailIface {
 fn compose(
     app_id: &str,
     request_path: &str,
-    options: &HashMap<String, Value<'_>>,
+    options: &HashMap<String, Variant<'_>>,
     tracker: &Arc<Mutex<RequestTracker>>,
 ) -> zbus::fdo::Result<PortalResponse> {
     if sync::lock(tracker, "email tracker").was_closed(request_path) {
@@ -93,12 +93,13 @@ fn compose(
     if let Some(token) = &parsed.activation_token {
         command.env("XDG_ACTIVATION_TOKEN", token);
     }
-    if ACTIVE_MAILERS
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-            (active < MAX_ACTIVE_MAILERS).then_some(active + 1)
-        })
-        .is_err()
-    {
+    // `fetch_update` is what 1.89 has; `try_update` is its 1.95 rename and
+    // cannot be used while the workspace MSRV is 1.89.
+    #[allow(deprecated)]
+    let mailer_slot = ACTIVE_MAILERS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+        (active < MAX_ACTIVE_MAILERS).then_some(active + 1)
+    });
+    if mailer_slot.is_err() {
         log::warn!("portal: refusing ComposeEmail request: mailer limit reached");
         return Ok((2, HashMap::new()));
     }
@@ -216,7 +217,7 @@ struct ParsedOptions {
 }
 
 impl ParsedOptions {
-    fn from(options: &HashMap<String, Value<'_>>) -> Result<Self, String> {
+    fn from(options: &HashMap<String, Variant<'_>>) -> Result<Self, String> {
         let string_list = |key: &str| {
             options
                 .get(key)
@@ -355,7 +356,7 @@ fn mailer_argv(parsed: &ParsedOptions) -> Vec<std::ffi::OsString> {
 mod tests {
     use super::*;
 
-    fn options(pairs: &[(&str, Value<'static>)]) -> HashMap<String, Value<'static>> {
+    fn options(pairs: &[(&str, Variant<'static>)]) -> HashMap<String, Variant<'static>> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
@@ -365,10 +366,10 @@ mod tests {
     #[test]
     fn address_and_addresses_merge_into_the_mailto_uri() {
         let parsed = ParsedOptions::from(&options(&[
-            ("address", Value::from("first@example.com")),
+            ("address", Variant::from("first@example.com")),
             (
                 "addresses",
-                Value::from(vec!["second@example.com".to_string()]),
+                Variant::from(vec!["second@example.com".to_string()]),
             ),
         ]))
         .unwrap();
@@ -382,13 +383,13 @@ mod tests {
     #[test]
     fn flags_cover_cc_bcc_subject_body_and_attachments() {
         let parsed = ParsedOptions::from(&options(&[
-            ("cc", Value::from(vec!["carbon@example.com".to_string()])),
-            ("bcc", Value::from(vec!["blind@example.com".to_string()])),
-            ("subject", Value::from("a subject")),
-            ("body", Value::from("the body")),
+            ("cc", Variant::from(vec!["carbon@example.com".to_string()])),
+            ("bcc", Variant::from(vec!["blind@example.com".to_string()])),
+            ("subject", Variant::from("a subject")),
+            ("body", Variant::from("the body")),
             (
                 "attachments",
-                Value::from(vec!["file:///documents/attachment%200".to_string()]),
+                Variant::from(vec!["file:///documents/attachment%200".to_string()]),
             ),
         ]))
         .unwrap();
@@ -420,7 +421,7 @@ mod tests {
         ] {
             let error = ParsedOptions::from(&options(&[(
                 "attachments",
-                Value::from(vec![uri.to_string()]),
+                Variant::from(vec![uri.to_string()]),
             )]))
             .unwrap_err();
             assert!(error.contains("valid local file URI or absolute path"));
@@ -431,7 +432,7 @@ mod tests {
     fn frontend_compatibility_absolute_attachment_path_is_accepted() {
         let parsed = ParsedOptions::from(&options(&[(
             "attachments",
-            Value::from(vec!["/tmp/frontend attachment.bin".to_string()]),
+            Variant::from(vec!["/tmp/frontend attachment.bin".to_string()]),
         )]))
         .unwrap();
         assert_eq!(
@@ -444,14 +445,14 @@ mod tests {
     fn oversized_mailer_payload_and_attachment_flood_are_rejected() {
         let oversized = ParsedOptions::from(&options(&[(
             "body",
-            Value::from("x".repeat(MAX_MAILER_ARGUMENT_BYTES + 1)),
+            Variant::from("x".repeat(MAX_MAILER_ARGUMENT_BYTES + 1)),
         )]));
         assert!(oversized.is_err());
 
         let attachments: Vec<String> = (0..=MAX_ATTACHMENTS)
             .map(|index| format!("file:///tmp/attachment-{index}"))
             .collect();
-        let flooded = ParsedOptions::from(&options(&[("attachments", Value::from(attachments))]));
+        let flooded = ParsedOptions::from(&options(&[("attachments", Variant::from(attachments))]));
         assert!(flooded.is_err());
     }
 }

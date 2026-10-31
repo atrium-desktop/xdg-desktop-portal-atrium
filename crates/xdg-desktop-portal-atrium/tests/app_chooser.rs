@@ -9,10 +9,10 @@
 use std::collections::HashMap;
 
 use atrium_portal_ipc::AppPickResult;
-use zbus::blocking::Proxy;
-use zbus::zvariant::{ObjectPath, OwnedValue, Value};
+use zbus::{ObjectPath, OwnedVariant, Variant};
 
 mod common;
+use common::bus;
 use common::fake_compositor::FakeCompositor;
 use common::{KillOnDrop, daemon_command, e2e_required, private_bus, temp_dir, wait_for_name};
 
@@ -63,7 +63,7 @@ fn start(
     answer: AppPickResult,
     seed: bool,
 ) -> Option<(
-    zbus::blocking::Connection,
+    zbus::Connection,
     std::sync::Arc<FakeCompositor>,
     atrium_portal_ipc::testing::Server,
     KillOnDrop,
@@ -95,27 +95,26 @@ fn start(
 }
 
 fn choose_application(
-    conn: &zbus::blocking::Connection,
+    conn: &zbus::Connection,
     content_type: &str,
-) -> (u32, HashMap<String, OwnedValue>) {
-    let chooser = Proxy::new(conn, PORTAL, DESKTOP_PATH, IFACE).expect("app chooser proxy");
+) -> (u32, HashMap<String, OwnedVariant>) {
+    let chooser = bus::proxy(conn, PORTAL, DESKTOP_PATH, IFACE);
     let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1/app1")
         .expect("request handle path");
-    let mut options: HashMap<String, Value<'_>> = HashMap::new();
-    options.insert("last_choice".to_owned(), Value::from("viewer.desktop"));
-    chooser
-        .call(
-            "ChooseApplication",
-            &(
-                handle,
-                "dev.tessera.smoke",
-                "wayland:parent",
-                Vec::<String>::new(),
-                content_type,
-                options,
-            ),
-        )
-        .expect("ChooseApplication")
+    let mut options: HashMap<String, Variant<'_>> = HashMap::new();
+    options.insert("last_choice".to_owned(), Variant::from("viewer.desktop"));
+    bus::call(
+        &chooser,
+        "ChooseApplication",
+        &(
+            handle,
+            "dev.tessera.smoke",
+            "wayland:parent",
+            Vec::<String>::new(),
+            content_type,
+            options,
+        ),
+    )
 }
 
 #[test]

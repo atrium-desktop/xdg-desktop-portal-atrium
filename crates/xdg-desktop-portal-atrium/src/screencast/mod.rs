@@ -45,7 +45,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use zbus::zvariant::{Array, Dict, ObjectPath, Structure, StructureBuilder, Value};
+use zbus::wire::StructureBuilder;
+use zbus::{Array, Dict, ObjectPath, Structure, Variant};
 
 use atrium_portal_request::{PortalResponse, RequestTracker, ResponseSender, sync};
 use restore::{StoredSelection, StoredSource};
@@ -109,7 +110,7 @@ pub(crate) struct SelectOptions {
 }
 
 /// Parse `SelectSources` options. Unknown keys are ignored per spec.
-pub(crate) fn parse_select_options(options: &HashMap<String, Value<'_>>) -> SelectOptions {
+pub(crate) fn parse_select_options(options: &HashMap<String, Variant<'_>>) -> SelectOptions {
     let source_types = options
         .get("types")
         .and_then(|value| u32::try_from(value).ok())
@@ -216,7 +217,7 @@ impl ScreenCastIface {
         handle: ObjectPath<'_>,
         session_handle: ObjectPath<'_>,
         app_id: &str,
-        _options: HashMap<String, Value<'_>>,
+        _options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let request_path = handle.as_str().to_string();
         let session_path = session_handle.as_str().to_string();
@@ -252,7 +253,7 @@ impl ScreenCastIface {
                 return Err(zbus::fdo::Error::from(error));
             }
         };
-        if !inserted {
+        if inserted.is_some() {
             let _ = sync::lock(&self.sessions, "screencast sessions").remove(&session_path);
             atrium_portal_request::finish(&self.conn, &self.tracker, &request_path).await;
             return Ok((2, HashMap::new()));
@@ -267,7 +268,7 @@ impl ScreenCastIface {
         handle: ObjectPath<'_>,
         session_handle: ObjectPath<'_>,
         app_id: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let session_path = session_handle.as_str().to_string();
@@ -322,7 +323,7 @@ impl ScreenCastIface {
         session_handle: ObjectPath<'_>,
         app_id: &str,
         _parent_window: &str,
-        _options: HashMap<String, Value<'_>>,
+        _options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let session_path = session_handle.as_str().to_string();
         if !sync::lock(&self.sessions, "screencast sessions").contains(&session_path) {
@@ -419,7 +420,7 @@ impl ScreenCastIface {
 pub(crate) fn cast_worker(
     rx: &mpsc::Receiver<CastJob>,
     jobs: mpsc::SyncSender<CastJob>,
-    conn: zbus::blocking::Connection,
+    conn: zbus::Connection,
     tracker: Arc<Mutex<RequestTracker>>,
     sessions: Arc<Mutex<SessionRegistry>>,
     restore_store: Arc<Mutex<RestoreStore>>,
@@ -811,7 +812,7 @@ fn start_cast(
     request_path: &str,
     session_path: &str,
     app_id: &str,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     if sync::lock(tracker, "screencast tracker").was_closed(request_path) {
         return (1, HashMap::new());
     }
@@ -921,15 +922,15 @@ fn start_cast(
             match &selection.persist_grant {
                 // A granted or restored token is reported with its mode.
                 Some((mode, token)) => {
-                    results.insert("persist_mode".to_string(), Value::from(*mode));
-                    results.insert("restore_token".to_string(), Value::from(token.clone()));
+                    results.insert("persist_mode".to_string(), Variant::from(*mode));
+                    results.insert("restore_token".to_string(), Variant::from(token.clone()));
                 }
                 // Omitting this would make the frontend assume the
                 // requested nonzero mode was granted. Report the safe
                 // reduction (no remember tick, or an unpersistable
                 // selection such as a window).
                 None if selection.requested_persist_mode != 0 => {
-                    results.insert("persist_mode".to_string(), Value::from(0_u32));
+                    results.insert("persist_mode".to_string(), Variant::from(0_u32));
                 }
                 None => {}
             }
@@ -954,7 +955,7 @@ fn start_cast(
 
 /// Stop the cast (if any), emit `Closed`, and remove the session object.
 fn close_session(
-    conn: &zbus::blocking::Connection,
+    conn: &zbus::Connection,
     sessions: &Arc<Mutex<SessionRegistry>>,
     session_path: &str,
 ) {
@@ -963,10 +964,18 @@ fn close_session(
     };
     session::stop_cast(session);
     log::debug!("portal: screencast session {session_path} closed");
-    if let Err(error) = conn.emit_signal(None::<&str>, session_path, SESSION_IFACE, "Closed", &()) {
+    if let Err(error) = atrium_portal_request::block_on(conn.emit_signal(
+        None::<&str>,
+        session_path,
+        SESSION_IFACE,
+        "Closed",
+        &(),
+    )) {
         log::warn!("portal: could not emit Closed for {session_path}: {error}");
     }
-    if let Err(error) = conn.object_server().remove::<SessionIface, _>(session_path) {
+    if let Err(error) = atrium_portal_request::block_on(
+        conn.object_server().remove::<SessionIface, _>(session_path),
+    ) {
         log::warn!("portal: could not remove {session_path}: {error}");
     }
 }
@@ -980,40 +989,42 @@ fn streams_value(
     source_type: u32,
     position: (i32, i32),
     size: (i32, i32),
-) -> Value<'static> {
-    let properties: HashMap<String, Value<'static>> = HashMap::from([
+) -> Variant<'static> {
+    let properties: HashMap<String, Variant<'static>> = HashMap::from([
         (
             "position".to_string(),
-            Value::Structure(Structure::from(position)),
+            Variant::Structure(Structure::from(position)),
         ),
-        ("size".to_string(), Value::Structure(Structure::from(size))),
-        ("source_type".to_string(), Value::U32(source_type)),
-        ("pipewire-serial".to_string(), Value::U64(pipewire_serial)),
+        (
+            "size".to_string(),
+            Variant::Structure(Structure::from(size)),
+        ),
+        ("source_type".to_string(), Variant::U32(source_type)),
+        ("pipewire-serial".to_string(), Variant::U64(pipewire_serial)),
     ]);
     // `append_field` keeps each field's dynamic signature, so the structure
     // types as `(ua{sv})`; `Structure::from` would route the fields through
     // `Value::new` and wrap them as variants (`(vv)`).
     let stream = StructureBuilder::new()
-        .append_field(Value::U32(node_id))
-        .append_field(Value::Dict(Dict::from(properties)))
+        .append_field(Variant::U32(node_id))
+        .append_field(Variant::Dict(Dict::from(properties)))
         .build()
         .expect("non-empty structure");
     // The array must carry the element signature `(ua{sv})` — building it
     // from a `Vec<Value>` would type it as `av`, which the frontend cannot
     // deserialize as the spec's `a(ua{sv})`.
-    let mut streams =
-        Array::new(&zbus::zvariant::Signature::try_from("(ua{sv})").expect("valid signature"));
+    let mut streams = Array::new(&zbus::Signature::try_from("(ua{sv})").expect("valid signature"));
     streams
-        .append(Value::Structure(stream))
+        .append(Variant::Structure(stream))
         .expect("stream element matches");
-    Value::Array(streams)
+    Variant::Array(streams)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn options(pairs: &[(&str, Value<'static>)]) -> HashMap<String, Value<'static>> {
+    fn options(pairs: &[(&str, Variant<'static>)]) -> HashMap<String, Variant<'static>> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
@@ -1053,7 +1064,7 @@ mod tests {
     fn select_options_accept_monitor_and_window_mix() {
         // Clients such as OBS's unified screen capture offer every type they
         // can take; serving the supported subset is the contract.
-        let parsed = parse_select_options(&options(&[("types", Value::from(0b11u32))]));
+        let parsed = parse_select_options(&options(&[("types", Variant::from(0b11u32))]));
         assert!(validate_select(&parsed, 24).is_ok());
         assert!(validate_select(&parsed, 29).is_ok());
     }
@@ -1062,17 +1073,17 @@ mod tests {
     fn embedded_cursor_mode_needs_protocol_29() {
         for unsupported in [0u32, 3, 4, 5] {
             let parsed =
-                parse_select_options(&options(&[("cursor_mode", Value::from(unsupported))]));
+                parse_select_options(&options(&[("cursor_mode", Variant::from(unsupported))]));
             assert!(validate_select(&parsed, 29).is_err());
         }
-        let parsed = parse_select_options(&options(&[("cursor_mode", Value::from(2u32))]));
+        let parsed = parse_select_options(&options(&[("cursor_mode", Variant::from(2u32))]));
         assert!(validate_select(&parsed, 28).is_err());
         assert!(validate_select(&parsed, 29).is_ok());
     }
 
     #[test]
     fn window_only_sources_need_protocol_29() {
-        let window_only = parse_select_options(&options(&[("types", Value::from(0b10u32))]));
+        let window_only = parse_select_options(&options(&[("types", Variant::from(0b10u32))]));
         assert_eq!(window_only.source_types, 2);
         assert!(validate_select(&window_only, 28).is_err());
         assert!(validate_select(&window_only, 29).is_ok());
@@ -1080,9 +1091,9 @@ mod tests {
 
     #[test]
     fn select_options_refuse_unknown_source_bits() {
-        let unknown = parse_select_options(&options(&[("types", Value::from(0b100u32))]));
+        let unknown = parse_select_options(&options(&[("types", Variant::from(0b100u32))]));
         assert!(validate_select(&unknown, 29).is_err());
-        let empty = parse_select_options(&options(&[("types", Value::from(0u32))]));
+        let empty = parse_select_options(&options(&[("types", Variant::from(0u32))]));
         assert!(validate_select(&empty, 29).is_err());
     }
 
@@ -1090,15 +1101,15 @@ mod tests {
     fn restore_token_is_parsed_and_empty_tokens_ignored() {
         let parsed = parse_select_options(&options(&[(
             "restore_token",
-            Value::from("0123456789abcdef0123456789abcdef"),
+            Variant::from("0123456789abcdef0123456789abcdef"),
         )]));
         assert_eq!(
             parsed.restore_token.as_deref(),
             Some("0123456789abcdef0123456789abcdef")
         );
-        let parsed = parse_select_options(&options(&[("restore_token", Value::from(""))]));
+        let parsed = parse_select_options(&options(&[("restore_token", Variant::from(""))]));
         assert_eq!(parsed.restore_token, None);
-        let parsed = parse_select_options(&options(&[("restore_token", Value::from(7u32))]));
+        let parsed = parse_select_options(&options(&[("restore_token", Variant::from(7u32))]));
         assert_eq!(parsed.restore_token, None);
     }
 
@@ -1110,24 +1121,24 @@ mod tests {
     #[test]
     fn persist_modes_are_parsed_and_unknown_values_refused() {
         for mode in 0_u32..=2 {
-            let parsed = parse_select_options(&options(&[("persist_mode", Value::from(mode))]));
+            let parsed = parse_select_options(&options(&[("persist_mode", Variant::from(mode))]));
             assert_eq!(parsed.persist_mode, mode);
             assert!(validate_select(&parsed, 29).is_ok());
         }
-        let parsed = parse_select_options(&options(&[("persist_mode", Value::from(3_u32))]));
+        let parsed = parse_select_options(&options(&[("persist_mode", Variant::from(3_u32))]));
         assert!(validate_select(&parsed, 29).is_err());
     }
 
     #[test]
     fn select_options_ignore_wrong_types() {
-        let parsed = parse_select_options(&options(&[("types", Value::from("monitor"))]));
+        let parsed = parse_select_options(&options(&[("types", Variant::from("monitor"))]));
         assert!(validate_select(&parsed, 29).is_ok());
     }
 
     #[test]
     fn streams_value_has_portal_shape() {
         let value = streams_value(42, 9001, SOURCE_TYPE_MONITOR, (0, 0), (1920, 1080));
-        let Value::Array(array) = &value else {
+        let Variant::Array(array) = &value else {
             panic!("streams must be an array");
         };
         assert_eq!(array.len(), 1);
@@ -1138,22 +1149,23 @@ mod tests {
             "a(ua{sv})",
             "streams signature"
         );
-        let stream: &Value<'_> = &array.get(0).expect("read").expect("one stream");
-        let Value::Structure(stream) = stream else {
+        let stream: &Variant<'_> = &array.get(0).expect("read").expect("one stream");
+        let Variant::Structure(stream) = stream else {
             panic!("stream element must be a structure");
         };
-        let Value::Dict(properties) = &stream.fields()[1] else {
+        let Variant::Dict(properties) = &stream.fields()[1] else {
             panic!("stream properties must be a dict");
         };
         assert!(properties.iter().any(|(key, value)| {
-            matches!(key, Value::Str(key) if key.as_str() == "pipewire-serial")
-                && matches!(value, Value::Value(value) if **value == Value::U64(9001))
+            matches!(key, Variant::Str(key) if key.as_str() == "pipewire-serial")
+                && matches!(value, Variant::Variant(value) if **value == Variant::U64(9001))
         }));
     }
 
     #[test]
     fn virtual_source_type_is_accepted_on_protocol_32() {
-        let parsed = parse_select_options(&options(&[("types", Value::from(SOURCE_TYPE_VIRTUAL))]));
+        let parsed =
+            parse_select_options(&options(&[("types", Variant::from(SOURCE_TYPE_VIRTUAL))]));
         assert!(validate_select(&parsed, 32).is_ok());
         assert!(validate_select(&parsed, 29).is_err());
     }

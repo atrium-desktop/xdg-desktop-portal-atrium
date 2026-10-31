@@ -6,10 +6,10 @@
 //! `Supervisor` restarts the worker instead (ADR-0028), and this test drives
 //! that through the real daemon.
 
-use zbus::blocking::Proxy;
-use zbus::zvariant::{ObjectPath, OwnedValue, Value};
+use zbus::{ObjectPath, OwnedVariant, Variant};
 
 mod common;
+use common::bus;
 use common::{KillOnDrop, daemon_command, e2e_required, private_bus, temp_dir, wait_for_name};
 
 const PORTAL: &str = "org.freedesktop.impl.portal.desktop.atrium";
@@ -18,34 +18,32 @@ const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
 /// An Access request with no compositor socket: the consent step cannot reach
 /// the compositor, which exercises the worker's error path end to end.
 fn access(
-    conn: &zbus::blocking::Connection,
+    conn: &zbus::Connection,
     path: &str,
-) -> (u32, std::collections::HashMap<String, OwnedValue>) {
-    let proxy = Proxy::new(
+) -> (u32, std::collections::HashMap<String, OwnedVariant>) {
+    let proxy = bus::proxy(
         conn,
         PORTAL,
         DESKTOP_PATH,
         "org.freedesktop.impl.portal.Access",
-    )
-    .expect("access proxy");
+    );
     let handle = ObjectPath::try_from(path).expect("request handle");
-    let mut options: std::collections::HashMap<String, Value<'_>> =
+    let mut options: std::collections::HashMap<String, Variant<'_>> =
         std::collections::HashMap::new();
-    options.insert("grant_label".to_owned(), Value::from("Allow"));
-    proxy
-        .call(
-            "AccessDialog",
-            &(
-                handle,
-                "dev.tessera.smoke",
-                "wayland:p",
-                "Title",
-                "",
-                "Body",
-                options,
-            ),
-        )
-        .expect("AccessDialog answers")
+    options.insert("grant_label".to_owned(), Variant::from("Allow"));
+    bus::call(
+        &proxy,
+        "AccessDialog",
+        &(
+            handle,
+            "dev.tessera.smoke",
+            "wayland:p",
+            "Title",
+            "",
+            "Body",
+            options,
+        ),
+    )
 }
 
 /// The interface keeps answering across many requests. Each request is served

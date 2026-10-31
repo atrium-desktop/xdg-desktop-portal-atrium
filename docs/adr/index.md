@@ -30,3 +30,4 @@
 | [0026](0026-prompter-process-retirement.md) | Prompter process retirement and companion prompt ownership | Accepted (supersedes the compatibility carve-out in [0021](0021-headless-portal-and-optics-retirement.md)) |
 | [0027](0027-arca-chooser-contract-crate.md) | The arca FileChooser contract crate | Accepted |
 | [0028](0028-supervised-workers-and-test-isolation.md) | Supervised interface workers and hermetic test processes | Accepted |
+| [0029](0029-zbus-6-migration.md) | zbus 6 migration and the connection driver | Accepted |

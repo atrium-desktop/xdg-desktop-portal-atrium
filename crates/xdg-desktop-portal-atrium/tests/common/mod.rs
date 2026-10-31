@@ -13,6 +13,7 @@
 //! as one, so its items are legitimately `pub` within each binary.
 #![allow(dead_code, unreachable_pub)]
 
+pub mod bus;
 pub mod fake_compositor;
 
 use std::io::{BufRead, BufReader};
@@ -82,11 +83,8 @@ impl PrivateBus {
     }
 
     /// A blocking zbus connection to this bus.
-    pub fn connect(&self) -> zbus::blocking::Connection {
-        zbus::blocking::connection::Builder::address(self.address.as_str())
-            .expect("valid private bus address")
-            .build()
-            .expect("connect to the private bus")
+    pub fn connect(&self) -> zbus::Connection {
+        bus::connect(self.address.as_str())
     }
 }
 
@@ -272,20 +270,20 @@ pub fn frontend_prerequisites(bus: &PrivateBus) -> Result<(), &'static str> {
         return Err("xdg-document-portal is not installed");
     }
     let conn = bus.connect();
-    let fdo = zbus::blocking::Proxy::new(
+    let fdo = bus::proxy(
         &conn,
         "org.freedesktop.DBus",
         "/org/freedesktop/DBus",
         "org.freedesktop.DBus",
-    )
-    .expect("fdo proxy");
+    );
     // A service that never answers distinguishes an inert bus from a live one.
     // An activation request for a name nobody serves returns promptly on a bus
     // with an activation helper, and hangs without one, so bound it.
     let activated: Result<(u32,), _> = {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            match fdo.call(
+            match bus::try_call(
+                &fdo,
                 "StartServiceByName",
                 &("org.freedesktop.portal.ProbeNobodyServes", 0u32),
             ) {
@@ -306,20 +304,16 @@ pub fn frontend_prerequisites(bus: &PrivateBus) -> Result<(), &'static str> {
 }
 
 /// Wait up to `bound` for `name`; returns whether it appeared.
-fn name_appears(conn: &zbus::blocking::Connection, name: &str, bound: Duration) -> bool {
-    let fdo = zbus::blocking::Proxy::new(
+fn name_appears(conn: &zbus::Connection, name: &str, bound: Duration) -> bool {
+    let fdo = bus::proxy(
         conn,
         "org.freedesktop.DBus",
         "/org/freedesktop/DBus",
         "org.freedesktop.DBus",
-    )
-    .expect("fdo proxy");
+    );
     let deadline = Instant::now() + bound;
     loop {
-        if fdo
-            .call::<_, _, bool>("NameHasOwner", &(name,))
-            .expect("NameHasOwner call")
-        {
+        if bus::call::<_, bool>(&fdo, "NameHasOwner", &(name,)) {
             return true;
         }
         if Instant::now() >= deadline {
@@ -336,7 +330,7 @@ fn name_appears(conn: &zbus::blocking::Connection, name: &str, bound: Duration) 
 /// caller should report "skipped" instead of an opaque timeout. The bound is
 /// short on purpose — the prerequisite check above is what decides whether the
 /// frontend *can* start, and this only covers the residual race.
-pub fn wait_for_frontend(conn: &zbus::blocking::Connection) -> bool {
+pub fn wait_for_frontend(conn: &zbus::Connection) -> bool {
     name_appears(
         conn,
         "org.freedesktop.portal.Desktop",
@@ -345,19 +339,16 @@ pub fn wait_for_frontend(conn: &zbus::blocking::Connection) -> bool {
 }
 
 /// Wait until the daemon owns `name` (10 s bound).
-pub fn wait_for_name(conn: &zbus::blocking::Connection, name: &str) {
-    let fdo = zbus::blocking::Proxy::new(
+pub fn wait_for_name(conn: &zbus::Connection, name: &str) {
+    let fdo = bus::proxy(
         conn,
         "org.freedesktop.DBus",
         "/org/freedesktop/DBus",
         "org.freedesktop.DBus",
-    )
-    .expect("fdo proxy");
+    );
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let owned: bool = fdo
-            .call("NameHasOwner", &(name,))
-            .expect("NameHasOwner call");
+        let owned: bool = bus::call(&fdo, "NameHasOwner", &(name,));
         if owned {
             return;
         }

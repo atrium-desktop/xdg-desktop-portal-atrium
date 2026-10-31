@@ -8,10 +8,11 @@
 use std::collections::HashMap;
 
 use atrium_portal_ipc::Command;
-use zbus::blocking::Proxy;
-use zbus::zvariant::Value;
+use zbus::Proxy;
+use zbus::Variant;
 
 mod common;
+use common::bus;
 use common::fake_compositor::FakeCompositor;
 use common::{KillOnDrop, daemon_command, e2e_required, private_bus, temp_dir, wait_for_name};
 
@@ -40,14 +41,14 @@ fn notification_is_served_by_atrium() {
     );
 }
 
-fn notifications(conn: &zbus::blocking::Connection) -> Proxy<'_> {
-    Proxy::new(conn, PORTAL, DESKTOP_PATH, IFACE).expect("notification proxy")
+fn notifications(conn: &zbus::Connection) -> Proxy<'_> {
+    bus::proxy(conn, PORTAL, DESKTOP_PATH, IFACE)
 }
 
 /// Start the daemon against a fake compositor, returning the guards and the
 /// fake. `None` when no private bus is available.
 fn start() -> Option<(
-    zbus::blocking::Connection,
+    zbus::Connection,
     std::sync::Arc<FakeCompositor>,
     atrium_portal_ipc::testing::Server,
     KillOnDrop,
@@ -79,13 +80,15 @@ fn add_notification_reaches_the_compositor_queue() {
     let Some((conn, fake, _server, _daemon, _bus)) = start() else {
         return;
     };
-    let mut notification: HashMap<String, Value<'_>> = HashMap::new();
-    notification.insert("title".to_owned(), Value::from("Backup complete"));
-    notification.insert("body".to_owned(), Value::from("12 files archived."));
+    let mut notification: HashMap<String, Variant<'_>> = HashMap::new();
+    notification.insert("title".to_owned(), Variant::from("Backup complete"));
+    notification.insert("body".to_owned(), Variant::from("12 files archived."));
 
-    notifications(&conn)
-        .call::<_, _, ()>("AddNotification", &("dev.tessera.App", "n1", notification))
-        .expect("AddNotification must succeed");
+    bus::run(
+        notifications(&conn)
+            .call::<_, _, ()>("AddNotification", &("dev.tessera.App", "n1", notification)),
+    )
+    .expect("notification delivery must succeed");
 
     // The delivery runs on a short-lived thread, so wait for the command.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -117,10 +120,11 @@ fn a_notification_without_text_is_rejected() {
     let Some((conn, fake, _server, _daemon, _bus)) = start() else {
         return;
     };
-    let empty: HashMap<String, Value<'_>> = HashMap::new();
-    let error = notifications(&conn)
-        .call::<_, _, ()>("AddNotification", &("dev.tessera.App", "n1", empty))
-        .expect_err("a notification needs a title or a body");
+    let empty: HashMap<String, Variant<'_>> = HashMap::new();
+    let error = bus::run(
+        notifications(&conn).call::<_, _, ()>("AddNotification", &("dev.tessera.App", "n1", empty)),
+    )
+    .expect_err("a notification needs a title or a body");
     assert!(
         format!("{error}").contains("title or a body"),
         "unexpected error: {error}"
@@ -133,14 +137,16 @@ fn markup_body_is_stripped_before_delivery() {
     let Some((conn, fake, _server, _daemon, _bus)) = start() else {
         return;
     };
-    let mut notification: HashMap<String, Value<'_>> = HashMap::new();
+    let mut notification: HashMap<String, Variant<'_>> = HashMap::new();
     notification.insert(
         "markup-body".to_owned(),
-        Value::from("<b>Bold</b> &amp; plain"),
+        Variant::from("<b>Bold</b> &amp; plain"),
     );
-    notifications(&conn)
-        .call::<_, _, ()>("AddNotification", &("dev.tessera.App", "n1", notification))
-        .expect("AddNotification must succeed");
+    bus::run(
+        notifications(&conn)
+            .call::<_, _, ()>("AddNotification", &("dev.tessera.App", "n1", notification)),
+    )
+    .expect("notification delivery must succeed");
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {

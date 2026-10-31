@@ -29,7 +29,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, mpsc};
 
-use zbus::zvariant::{ObjectPath, Value};
+use zbus::{ObjectPath, Variant};
 
 use crate::ipc;
 use atrium_portal_apps::{AppDirs, AppInfo};
@@ -117,7 +117,7 @@ impl AppChooserIface {
         parent_window: &str,
         choices: Vec<String>,
         content_type: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let path = handle.as_str().to_string();
         log::info!("portal: ChooseApplication for '{app_id}' ({content_type}) at {path}");
@@ -160,7 +160,7 @@ impl AppChooserIface {
     async fn update_choices(
         &self,
         handle: ObjectPath<'_>,
-        choices: Vec<(String, HashMap<String, Value<'_>>)>,
+        choices: Vec<(String, HashMap<String, Variant<'_>>)>,
     ) -> zbus::fdo::Result<()> {
         if choices.len() > MAX_CHOICES
             || choices
@@ -194,7 +194,7 @@ fn build_request(
     parent_window: &str,
     choices: &[String],
     content_type: &str,
-    options: &HashMap<String, Value<'_>>,
+    options: &HashMap<String, Variant<'_>>,
 ) -> Result<ChooseAppRequest, String> {
     let apps = resolve_candidates(dirs, choices, content_type);
     if apps.is_empty() {
@@ -258,7 +258,7 @@ fn resolve_candidates(dirs: &AppDirs, supplied: &[String], content_type: &str) -
 /// Log the embedded choices the frontend offered. The compositor picker
 /// renders a candidate list and no embedded controls (ADR-0026), so these
 /// are shape-checked and acknowledged rather than shown.
-fn note_embedded_choices(options: &HashMap<String, Value<'_>>) {
+fn note_embedded_choices(options: &HashMap<String, Variant<'_>>) {
     let Some(value) = options.get("choices") else {
         return;
     };
@@ -330,7 +330,7 @@ fn run_dialog(
     request_path: &str,
     app_id: &str,
     request: ChooseAppRequest,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     if sync::lock(tracker, "app chooser tracker").was_closed(request_path) {
         return (1, HashMap::new());
     }
@@ -368,7 +368,7 @@ fn run_dialog(
                 return (2, HashMap::new());
             }
             log::info!("portal: ChooseApplication for '{app_id}' -> {id}");
-            (0, HashMap::from([("choice".to_owned(), Value::from(id))]))
+            (0, HashMap::from([("choice".to_owned(), Variant::from(id))]))
         }
         Ok(atrium_portal_ipc::AppPickResult::Cancelled) => (1, HashMap::new()),
         Err(error) => {
@@ -428,7 +428,7 @@ mod tests {
         }
     }
 
-    fn options(pairs: &[(&str, Value<'static>)]) -> HashMap<String, Value<'static>> {
+    fn options(pairs: &[(&str, Variant<'static>)]) -> HashMap<String, Variant<'static>> {
         pairs
             .iter()
             .map(|(key, value)| ((*key).to_owned(), value.clone()))
@@ -471,7 +471,7 @@ mod tests {
             "",
             &[],
             "text/plain",
-            &options(&[("last_choice", Value::from("viewer.desktop"))]),
+            &options(&[("last_choice", Variant::from("viewer.desktop"))]),
         )
         .expect("a resolvable choice");
         assert_eq!(request.last_choice.as_deref(), Some("viewer.desktop"));
@@ -482,7 +482,7 @@ mod tests {
             "",
             &[],
             "text/plain",
-            &options(&[("last_choice", Value::from("missing.desktop"))]),
+            &options(&[("last_choice", Variant::from("missing.desktop"))]),
         )
         .expect("a resolvable choice");
         assert!(
@@ -508,7 +508,7 @@ mod tests {
         // The embedded controls the frontend offered do not reach the picker.
         let with_choices = options(&[(
             "choices",
-            Value::from(vec![(
+            Variant::from(vec![(
                 "encoding".to_owned(),
                 "Encoding".to_owned(),
                 vec![("utf8".to_owned(), "UTF-8".to_owned())],

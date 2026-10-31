@@ -31,10 +31,10 @@ jobs:
   msrv:
     runs-on: ubuntu-24.04
     env:
-      RUSTUP_TOOLCHAIN: "1.88.0"
+      RUSTUP_TOOLCHAIN: "1.89.0"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.89.0
         with:
           components: clippy
       - name: Install build dependencies

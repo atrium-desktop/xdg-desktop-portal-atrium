@@ -20,6 +20,7 @@ atrium-portal-secret = { workspace = true }
 # stays on a plain `std::thread` model without an async runtime.
 zbus = { workspace = true }
 async-channel = { workspace = true }
+futures-util = { workspace = true }
 env_logger = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }

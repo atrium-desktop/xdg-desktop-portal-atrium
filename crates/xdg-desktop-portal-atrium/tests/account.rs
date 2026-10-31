@@ -5,10 +5,10 @@
 use std::collections::HashMap;
 
 use atrium_portal_ipc::ConfirmPickResult;
-use zbus::blocking::Proxy;
-use zbus::zvariant::{ObjectPath, OwnedValue, Value};
+use zbus::{ObjectPath, OwnedVariant, Variant};
 
 mod common;
+use common::bus;
 use common::fake_compositor::FakeCompositor;
 use common::{KillOnDrop, daemon_command, private_bus, temp_dir, wait_for_name};
 
@@ -23,7 +23,7 @@ type Consent = (String, String);
 fn get_user_information(
     answer: ConfirmPickResult,
     with_avatar: bool,
-) -> Option<(u32, HashMap<String, OwnedValue>, Consent)> {
+) -> Option<(u32, HashMap<String, OwnedVariant>, Consent)> {
     let Some(bus) = private_bus() else {
         eprintln!("account: no dbus-daemon, skipping");
         return None;
@@ -48,25 +48,24 @@ fn get_user_information(
     );
     wait_for_name(&conn, PORTAL);
 
-    let account = Proxy::new(&conn, PORTAL, DESKTOP_PATH, IFACE).expect("account proxy");
-    let mut options: HashMap<String, Value<'_>> = HashMap::new();
+    let account = bus::proxy(&conn, PORTAL, DESKTOP_PATH, IFACE);
+    let mut options: HashMap<String, Variant<'_>> = HashMap::new();
     options.insert(
         "reason".to_string(),
-        Value::from("Allows your personal information to be included in recipes you share."),
+        Variant::from("Allows your personal information to be included in recipes you share."),
     );
     let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1/acc1")
         .expect("request handle path");
-    let (response, results): (u32, HashMap<String, OwnedValue>) = account
-        .call(
-            "GetUserInformation",
-            &(
-                handle,
-                "dev.tessera.smoke",
-                "wayland:account-parent",
-                options,
-            ),
-        )
-        .expect("GetUserInformation");
+    let (response, results): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &account,
+        "GetUserInformation",
+        &(
+            handle,
+            "dev.tessera.smoke",
+            "wayland:account-parent",
+            options,
+        ),
+    );
 
     let consent = fake
         .confirms
@@ -134,20 +133,19 @@ fn an_unreachable_compositor_fails_closed() {
                 .expect("spawn portal daemon"),
         );
         wait_for_name(&conn, PORTAL);
-        let account = Proxy::new(&conn, PORTAL, DESKTOP_PATH, IFACE).expect("account proxy");
+        let account = bus::proxy(&conn, PORTAL, DESKTOP_PATH, IFACE);
         let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1/acc2")
             .expect("request handle path");
-        let (response, results): (u32, HashMap<String, OwnedValue>) = account
-            .call(
-                "GetUserInformation",
-                &(
-                    handle,
-                    "dev.tessera.smoke",
-                    "",
-                    HashMap::<String, Value<'_>>::new(),
-                ),
-            )
-            .expect("GetUserInformation");
+        let (response, results): (u32, HashMap<String, OwnedVariant>) = bus::call(
+            &account,
+            "GetUserInformation",
+            &(
+                handle,
+                "dev.tessera.smoke",
+                "",
+                HashMap::<String, Variant<'_>>::new(),
+            ),
+        );
         let _ = std::fs::remove_dir_all(&data_dir);
         let _ = std::fs::remove_dir_all(&runtime_dir);
         Some((response, results, (String::new(), String::new())))

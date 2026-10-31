@@ -58,7 +58,7 @@ The release gates exercise two production integration baselines:
 | Current development | 1.20.4 | 1.6.4 | 0.5.14 |
 
 The target session must run PipeWire 0.3 or newer with the SPA 0.2 ABI for
-ScreenCast consumers. The Ubuntu baseline is tested with Rust 1.88, the
+ScreenCast consumers. The Ubuntu baseline is tested with Rust 1.89, the
 minimum supported Rust version. Compatible newer releases remain supported
 through their stable ABIs.
 

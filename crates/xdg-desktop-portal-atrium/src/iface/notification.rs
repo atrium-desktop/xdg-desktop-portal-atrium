@@ -36,7 +36,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use zbus::zvariant::Value;
+use zbus::Variant;
 
 use crate::ipc;
 
@@ -64,7 +64,7 @@ impl NotificationIface {
         &self,
         app_id: &str,
         id: &str,
-        notification: HashMap<String, Value<'_>>,
+        notification: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<()> {
         log::info!("portal: AddNotification for '{app_id}' id '{id}'");
         let parsed =
@@ -99,7 +99,7 @@ impl NotificationIface {
 
     /// No special categories or button purposes are understood.
     #[zbus(property, name = "SupportedOptions")]
-    fn supported_options(&self) -> HashMap<String, Value<'static>> {
+    fn supported_options(&self) -> HashMap<String, Variant<'static>> {
         HashMap::new()
     }
 
@@ -179,7 +179,7 @@ fn valid_id(value: &str) -> Result<(), String> {
 fn parse_notification(
     app_id: &str,
     id: &str,
-    map: &HashMap<String, Value<'_>>,
+    map: &HashMap<String, Variant<'_>>,
 ) -> Result<Notification, String> {
     valid_id(app_id)?;
     valid_id(id)?;
@@ -315,7 +315,7 @@ impl LiveNotifications {
 mod tests {
     use super::*;
 
-    fn map(pairs: &[(&str, Value<'static>)]) -> HashMap<String, Value<'static>> {
+    fn map(pairs: &[(&str, Variant<'static>)]) -> HashMap<String, Variant<'static>> {
         pairs
             .iter()
             .map(|(key, value)| ((*key).to_owned(), value.clone()))
@@ -326,21 +326,25 @@ mod tests {
     fn notification_requires_a_title_or_body() {
         assert!(parse_notification("app", "1", &map(&[])).is_err());
         let parsed =
-            parse_notification("app", "1", &map(&[("body", Value::from("hello"))])).unwrap();
+            parse_notification("app", "1", &map(&[("body", Variant::from("hello"))])).unwrap();
         assert_eq!(parsed.summary, "");
         assert_eq!(parsed.body, "hello");
     }
 
     #[test]
     fn ids_and_text_are_bounded_and_control_free() {
-        assert!(parse_notification("app", "", &map(&[("title", Value::from("t"))])).is_err());
+        assert!(parse_notification("app", "", &map(&[("title", Variant::from("t"))])).is_err());
         assert!(
-            parse_notification(&"a".repeat(256), "1", &map(&[("title", Value::from("t"))]))
-                .is_err()
+            parse_notification(
+                &"a".repeat(256),
+                "1",
+                &map(&[("title", Variant::from("t"))])
+            )
+            .is_err()
         );
-        assert!(parse_notification("app", "1", &map(&[("title", Value::from("a\0b"))])).is_err());
+        assert!(parse_notification("app", "1", &map(&[("title", Variant::from("a\0b"))])).is_err());
         let long = "x".repeat(MAX_TITLE_CHARS + 1);
-        assert!(parse_notification("app", "1", &map(&[("title", Value::from(long))])).is_err());
+        assert!(parse_notification("app", "1", &map(&[("title", Variant::from(long))])).is_err());
     }
 
     #[test]
@@ -348,7 +352,7 @@ mod tests {
         let parsed = parse_notification(
             "app",
             "1",
-            &map(&[("markup-body", Value::from("<b>bold</b> &amp; plain"))]),
+            &map(&[("markup-body", Variant::from("<b>bold</b> &amp; plain"))]),
         )
         .unwrap();
         assert_eq!(parsed.body, "bold & plain");
@@ -357,8 +361,8 @@ mod tests {
             "app",
             "1",
             &map(&[
-                ("body", Value::from("plain")),
-                ("markup-body", Value::from("<i>ignored</i>")),
+                ("body", Variant::from("plain")),
+                ("markup-body", Variant::from("<i>ignored</i>")),
             ]),
         )
         .unwrap();

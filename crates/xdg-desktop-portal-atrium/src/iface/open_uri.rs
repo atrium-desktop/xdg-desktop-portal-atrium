@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 
-use zbus::zvariant::{ObjectPath, OwnedFd, Value};
+use zbus::{ObjectPath, OwnedFd, Variant};
 
 use crate::app_chooser::{AppChoice, ChooseAppRequest};
 use crate::{ipc, uri};
@@ -76,7 +76,7 @@ impl OpenUriIface {
         app_id: &str,
         parent_window: &str,
         uri: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         self.open(handle, app_id, parent_window, uri.to_owned(), &options)
             .await
@@ -88,7 +88,7 @@ impl OpenUriIface {
         app_id: &str,
         parent_window: &str,
         fd: OwnedFd,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         // Resolve the descriptor to its path, then drop it: the fd must
         // not outlive the method call.
@@ -119,7 +119,7 @@ impl OpenUriIface {
         app_id: &str,
         parent_window: &str,
         uri: String,
-        options: &HashMap<String, Value<'_>>,
+        options: &HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let path = handle.as_str().to_string();
         log::info!("portal: OpenURI for '{app_id}' at {path}: {uri}");
@@ -340,7 +340,7 @@ fn run_open(
     content_type: &str,
     parent_window: Option<String>,
     ask: bool,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     if sync::lock(tracker, "open uri tracker").was_closed(request_path) {
         return (1, HashMap::new());
     }
@@ -382,7 +382,7 @@ fn run_chooser(
     content_type: &str,
     parent_window: Option<String>,
     candidates: Vec<AppChoice>,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     let request = ChooseAppRequest {
         app_id: app_id.to_owned(),
         title: "Open With".to_owned(),

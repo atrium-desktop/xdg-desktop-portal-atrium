@@ -33,7 +33,7 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 
-use zbus::zvariant::{ObjectPath, OwnedFd, Value};
+use zbus::{ObjectPath, OwnedFd, Variant};
 
 use atrium_portal_request::{PortalResponse, RequestTracker, ResponseSender, sync};
 
@@ -72,9 +72,9 @@ impl PrintIface {
         app_id: &str,
         _parent_window: &str,
         title: &str,
-        settings: HashMap<String, Value<'_>>,
-        page_setup: HashMap<String, Value<'_>>,
-        options: HashMap<String, Value<'_>>,
+        settings: HashMap<String, Variant<'_>>,
+        page_setup: HashMap<String, Variant<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let path = handle.as_str().to_string();
         log::info!("portal: PreparePrint for '{app_id}' at {path}");
@@ -101,7 +101,7 @@ impl PrintIface {
         _parent_window: &str,
         title: &str,
         fd: OwnedFd,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let path = handle.as_str().to_string();
         log::info!("portal: Print for '{app_id}' at {path}");
@@ -152,8 +152,8 @@ fn fresh_token() -> u32 {
 /// runs inside the served method (the email precedent).
 fn prepare(
     app_id: &str,
-    settings: HashMap<String, Value<'_>>,
-    page_setup: HashMap<String, Value<'_>>,
+    settings: HashMap<String, Variant<'_>>,
+    page_setup: HashMap<String, Variant<'_>>,
 ) -> zbus::fdo::Result<PortalResponse> {
     for (name, map) in [("settings", &settings), ("page_setup", &page_setup)] {
         if let Err(error) = validate_map(name, map) {
@@ -161,17 +161,20 @@ fn prepare(
             return Ok((2, HashMap::new()));
         }
     }
-    let to_static = |map: HashMap<String, Value<'_>>| -> HashMap<String, Value<'static>> {
+    let to_static = |map: HashMap<String, Variant<'_>>| -> HashMap<String, Variant<'static>> {
         map.into_iter()
             .filter_map(|(key, value)| value.try_to_owned().ok().map(|v| (key, v)))
-            .map(|(key, value)| (key, Value::from(value)))
+            .map(|(key, value)| (key, Variant::from(value)))
             .collect()
     };
     let token = fresh_token();
-    let results: HashMap<String, Value<'static>> = HashMap::from([
-        ("settings".to_owned(), Value::from(to_static(settings))),
-        ("page-setup".to_owned(), Value::from(to_static(page_setup))),
-        ("token".to_owned(), Value::from(token)),
+    let results: HashMap<String, Variant<'static>> = HashMap::from([
+        ("settings".to_owned(), Variant::from(to_static(settings))),
+        (
+            "page-setup".to_owned(),
+            Variant::from(to_static(page_setup)),
+        ),
+        ("token".to_owned(), Variant::from(token)),
     ]);
     log::info!("portal: PreparePrint for '{app_id}' accepted as-is (token {token})");
     Ok((0, results))
@@ -180,7 +183,7 @@ fn prepare(
 /// Bound a settings/page-setup map: entry count, key shape, and string
 /// value sizes. Non-string values ride the bus already allocated and are
 /// echoed verbatim.
-fn validate_map(name: &str, map: &HashMap<String, Value<'_>>) -> Result<(), String> {
+fn validate_map(name: &str, map: &HashMap<String, Variant<'_>>) -> Result<(), String> {
     if map.len() > MAX_MAP_ENTRIES {
         return Err(format!("{name} exceeds the {MAX_MAP_ENTRIES}-entry limit"));
     }
@@ -341,7 +344,7 @@ fn run_print(
     title: &str,
     fd: OwnedFd,
     token: u32,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     if sync::lock(tracker, "print tracker").was_closed(request_path) {
         return (1, HashMap::new());
     }
@@ -359,7 +362,10 @@ fn run_print(
     match submission {
         Ok(()) => {
             log::info!("portal: Print for '{app_id}' queued via lp (token {token})");
-            (0, HashMap::from([("token".to_owned(), Value::from(token))]))
+            (
+                0,
+                HashMap::from([("token".to_owned(), Variant::from(token))]),
+            )
         }
         Err(error) => {
             log::warn!("portal: Print for '{app_id}' failed: {error}");
@@ -375,29 +381,29 @@ mod tests {
     #[test]
     fn maps_are_bounded() {
         let mut settings = HashMap::new();
-        settings.insert("copies".to_owned(), Value::from("2"));
+        settings.insert("copies".to_owned(), Variant::from("2"));
         assert!(validate_map("settings", &settings).is_ok());
 
-        let flooded: HashMap<String, Value<'static>> = (0..=MAX_MAP_ENTRIES)
-            .map(|index| (format!("key-{index}"), Value::from("x")))
+        let flooded: HashMap<String, Variant<'static>> = (0..=MAX_MAP_ENTRIES)
+            .map(|index| (format!("key-{index}"), Variant::from("x")))
             .collect();
         assert!(validate_map("settings", &flooded).is_err());
 
-        let oversized: HashMap<String, Value<'static>> = HashMap::from([(
+        let oversized: HashMap<String, Variant<'static>> = HashMap::from([(
             "job-name".to_owned(),
-            Value::from("x".repeat(MAX_STRING_VALUE_BYTES + 1)),
+            Variant::from("x".repeat(MAX_STRING_VALUE_BYTES + 1)),
         )]);
         assert!(validate_map("settings", &oversized).is_err());
 
-        let bad_key: HashMap<String, Value<'static>> =
-            HashMap::from([("".to_owned(), Value::from("x"))]);
+        let bad_key: HashMap<String, Variant<'static>> =
+            HashMap::from([("".to_owned(), Variant::from("x"))]);
         assert!(validate_map("settings", &bad_key).is_err());
     }
 
     #[test]
     fn prepare_echoes_maps_with_a_fresh_token() {
-        let settings = HashMap::from([("copies".to_owned(), Value::from("2"))]);
-        let page_setup = HashMap::from([("media".to_owned(), Value::from("A4"))]);
+        let settings = HashMap::from([("copies".to_owned(), Variant::from("2"))]);
+        let page_setup = HashMap::from([("media".to_owned(), Variant::from("A4"))]);
         let (response, results) = prepare("org.example.App", settings, page_setup).unwrap();
         assert_eq!(response, 0);
         let token = u32::try_from(&results["token"]).unwrap();
@@ -406,8 +412,8 @@ mod tests {
         assert!(results.contains_key("settings"));
         assert!(results.contains_key("page-setup"));
 
-        let oversized: HashMap<String, Value<'static>> = (0..=MAX_MAP_ENTRIES)
-            .map(|index| (format!("key-{index}"), Value::from("x")))
+        let oversized: HashMap<String, Variant<'static>> = (0..=MAX_MAP_ENTRIES)
+            .map(|index| (format!("key-{index}"), Variant::from("x")))
             .collect();
         let (response, _) = prepare("org.example.App", oversized, HashMap::new()).unwrap();
         assert_eq!(response, 2);

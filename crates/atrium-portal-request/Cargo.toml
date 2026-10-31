@@ -11,9 +11,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-channel = { workspace = true }
+libc = { workspace = true }
 log.workspace = true
 zbus.workspace = true
 
-[dev-dependencies]
-# The bus-backed lifecycle tests arm a parent-death signal on the test bus.
-libc = { workspace = true }

@@ -108,19 +108,24 @@ fn spawn_worker(
 /// Watch `NameOwnerChanged` and drop mode-2 screencast restore tokens when
 /// their owner's unique name vanishes from the bus.
 fn spawn_restore_watcher(
-    conn: zbus::blocking::Connection,
+    conn: zbus::Connection,
     store: Arc<Mutex<RestoreStore>>,
 ) -> Result<(), PortalError> {
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
-        .sender("org.freedesktop.DBus")?
-        .interface("org.freedesktop.DBus")?
-        .member("NameOwnerChanged")?
-        .build();
-    let iterator = zbus::blocking::MessageIterator::for_match_rule(rule, &conn, Some(64))?;
+        .sender("org.freedesktop.DBus")
+        .interface("org.freedesktop.DBus")
+        .member("NameOwnerChanged")
+        .build()?;
+    let stream = atrium_portal_request::block_on(async {
+        zbus::MessageStream::for_match_rule(rule, &conn, std::num::NonZeroUsize::new(64)).await
+    })?;
     spawn_worker("atrium-portal-restore-gc", move || {
-        for message in iterator {
-            let Ok(message) = message else {
+        use futures_util::StreamExt as _;
+        let mut stream = stream;
+        loop {
+            let next = atrium_portal_request::block_on(stream.next());
+            let Some(Ok(message)) = next else {
                 log::info!("portal: NameOwnerChanged watch ended; restore GC stops");
                 break;
             };
@@ -151,9 +156,12 @@ pub fn run() -> Result<(), PortalError> {
     // Global PipeWire setup for every future cast thread (idempotent).
     atrium_portal_cast::init();
 
-    let conn = zbus::blocking::connection::Builder::session()?
-        .build()
-        .map_err(PortalError::Bus)?;
+    let conn = atrium_portal_request::block_on(async {
+        zbus::connection::Builder::session().build().await
+    })
+    .map_err(PortalError::Bus)?;
+    let driver = atrium_portal_request::driver::spawn(conn.clone(), "atrium-portal-bus")
+        .map_err(PortalError::Worker)?;
 
     let tracker = Arc::new(Mutex::new(RequestTracker::default()));
     let sessions = Arc::new(Mutex::new(SessionRegistry::default()));
@@ -193,118 +201,232 @@ pub fn run() -> Result<(), PortalError> {
 
     // Serve before requesting the name so no call can arrive at a name we own
     // but do not serve yet (same ordering as the SNI tray watcher).
-    conn.object_server()
-        .at(DESKTOP_PATH, SettingsIface::new(settings_store.clone()))?;
-    conn.object_server().at(
-        DESKTOP_PATH,
-        ScreenshotIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-            jobs,
-        },
-    )?;
-    conn.object_server().at(
-        DESKTOP_PATH,
-        ScreenCastIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-            sessions: Arc::clone(&sessions),
-            jobs: cast_jobs.clone(),
-        },
-    )?;
+    {
+        let settings_store = settings_store.clone();
+        driver.call(move |conn| {
+            atrium_portal_request::block_on(async move {
+                conn.object_server()
+                    .at(DESKTOP_PATH, SettingsIface::new(settings_store))
+                    .await
+            })
+        })?;
+    }
+    let tracker__ = tracker.clone();
+    let jobs__ = jobs.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    ScreenshotIface {
+                        conn: conn.clone(),
+                        tracker: tracker__,
+                        jobs: jobs__,
+                    },
+                )
+                .await
+        })
+    })?;
+    let tracker__ = tracker.clone();
+    let sessions__ = sessions.clone();
+    let cast_jobs__ = cast_jobs.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    ScreenCastIface {
+                        conn: conn.clone(),
+                        tracker: tracker__,
+                        sessions: sessions__,
+                        jobs: cast_jobs__,
+                    },
+                )
+                .await
+        })
+    })?;
     // Stateless sandbox-policy query surface; no worker, no IPC.
-    conn.object_server()
-        .at(DESKTOP_PATH, lockdown::LockdownIface::default())?;
-    conn.object_server().at(
-        DESKTOP_PATH,
-        file_chooser::FileChooserIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-            jobs: file_chooser_jobs.clone(),
-        },
-    )?;
+    driver.call(|conn| {
+        atrium_portal_request::block_on(async {
+            conn.object_server()
+                .at(DESKTOP_PATH, lockdown::LockdownIface::default())
+                .await
+        })
+    })?;
+    let tracker__ = tracker.clone();
+    let file_chooser_jobs__ = file_chooser_jobs.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    file_chooser::FileChooserIface {
+                        conn: conn.clone(),
+                        tracker: tracker__,
+                        jobs: file_chooser_jobs__,
+                    },
+                )
+                .await
+        })
+    })?;
     // Email hand-off is fire-and-forget (no worker, no IPC).
-    conn.object_server().at(
-        DESKTOP_PATH,
-        email::EmailIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-        },
-    )?;
-    conn.object_server().at(
-        DESKTOP_PATH,
-        account::AccountIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-            jobs: account_jobs.clone(),
-        },
-    )?;
-    conn.object_server().at(
-        DESKTOP_PATH,
-        access::AccessIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-            jobs: access_jobs.clone(),
-        },
-    )?;
-    conn.object_server().at(
-        DESKTOP_PATH,
-        app_chooser::AppChooserIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-            jobs: app_chooser_jobs.clone(),
-        },
-    )?;
-    conn.object_server().at(
-        DESKTOP_PATH,
-        open_uri::OpenUriIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-            jobs: open_uri_jobs.clone(),
-        },
-    )?;
-    conn.object_server().at(
-        DESKTOP_PATH,
-        background::BackgroundIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-            jobs: background_jobs.clone(),
-        },
-    )?;
+    let tracker__ = tracker.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    email::EmailIface {
+                        conn: conn.clone(),
+                        tracker: tracker__,
+                    },
+                )
+                .await
+        })
+    })?;
+    let tracker__ = tracker.clone();
+    let account_jobs__ = account_jobs.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    account::AccountIface {
+                        conn: conn.clone(),
+                        tracker: tracker__,
+                        jobs: account_jobs__,
+                    },
+                )
+                .await
+        })
+    })?;
+    let tracker__ = tracker.clone();
+    let access_jobs__ = access_jobs.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    access::AccessIface {
+                        conn: conn.clone(),
+                        tracker: tracker__,
+                        jobs: access_jobs__,
+                    },
+                )
+                .await
+        })
+    })?;
+    let tracker__ = tracker.clone();
+    let app_chooser_jobs__ = app_chooser_jobs.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    app_chooser::AppChooserIface {
+                        conn: conn.clone(),
+                        tracker: tracker__,
+                        jobs: app_chooser_jobs__,
+                    },
+                )
+                .await
+        })
+    })?;
+    let tracker__ = tracker.clone();
+    let open_uri_jobs__ = open_uri_jobs.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    open_uri::OpenUriIface {
+                        conn: conn.clone(),
+                        tracker: tracker__,
+                        jobs: open_uri_jobs__,
+                    },
+                )
+                .await
+        })
+    })?;
+    let tracker__ = tracker.clone();
+    let background_jobs__ = background_jobs.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    background::BackgroundIface {
+                        conn: conn.clone(),
+                        tracker: tracker__,
+                        jobs: background_jobs__,
+                    },
+                )
+                .await
+        })
+    })?;
     // Inhibit calls logind in-method (one fast system-bus round trip); no
     // worker, no compositor IPC.
-    conn.object_server().at(
-        DESKTOP_PATH,
-        inhibit::InhibitIface::new(conn.inner().clone(), Arc::clone(&tracker)),
-    )?;
+    let tracker__ = tracker.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    inhibit::InhibitIface::new(conn.clone(), tracker__),
+                )
+                .await
+        })
+    })?;
     // Notification forwards to the compositor's queue (ADR-0026): no worker,
     // no Request objects, and no appearance plumbing -- the compositor skins
     // its own cards from the desktop preferences it already owns.
     let notify_live = Arc::new(std::sync::Mutex::new(
         notification::LiveNotifications::default(),
     ));
-    conn.object_server().at(
-        DESKTOP_PATH,
-        notification::NotificationIface::new(Arc::clone(&notify_live)),
-    )?;
-    conn.object_server().at(
-        DESKTOP_PATH,
-        wallpaper::WallpaperIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-            jobs: wallpaper_jobs.clone(),
-        },
-    )?;
-    conn.object_server().at(
-        DESKTOP_PATH,
-        print::PrintIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-            jobs: print_jobs.clone(),
-        },
-    )?;
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    notification::NotificationIface::new(Arc::clone(&notify_live)),
+                )
+                .await
+        })
+    })?;
+    let tracker__ = tracker.clone();
+    let wallpaper_jobs__ = wallpaper_jobs.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    wallpaper::WallpaperIface {
+                        conn: conn.clone(),
+                        tracker: tracker__,
+                        jobs: wallpaper_jobs__,
+                    },
+                )
+                .await
+        })
+    })?;
+    let tracker__ = tracker.clone();
+    let print_jobs__ = print_jobs.clone();
+    driver.call(move |conn| {
+        atrium_portal_request::block_on(async move {
+            conn.object_server()
+                .at(
+                    DESKTOP_PATH,
+                    print::PrintIface {
+                        conn: conn.clone(),
+                        tracker: tracker__,
+                        jobs: print_jobs__,
+                    },
+                )
+                .await
+        })
+    })?;
 
-    secret_service.register_portal(&conn, Arc::clone(&tracker), DESKTOP_PATH)?;
+    secret_service.register_portal(&driver, &conn, Arc::clone(&tracker), DESKTOP_PATH)?;
 
     let worker_tracker = Arc::clone(&tracker);
     let worker_socket = socket.clone();
@@ -402,7 +524,9 @@ pub fn run() -> Result<(), PortalError> {
 
     settings::spawn_watcher(conn.clone(), socket, settings_store).map_err(PortalError::Worker)?;
 
-    conn.request_name(BUS_NAME)?;
+    driver.call(|conn| {
+        atrium_portal_request::block_on(async { conn.request_name(BUS_NAME).await })
+    })?;
 
     log::info!(
         "portal: serving Settings+Screenshot+ScreenCast+Secret+Lockdown+FileChooser+Email+Account+Access+AppChooser+OpenURI+Background+Inhibit+Notification+Wallpaper+Print as {BUS_NAME}"
@@ -412,13 +536,18 @@ pub fn run() -> Result<(), PortalError> {
     // backend must exit so D-Bus activation can start a fresh process.
     loop {
         std::thread::sleep(std::time::Duration::from_secs(30));
-        conn.call_method(
-            Some("org.freedesktop.DBus"),
-            "/org/freedesktop/DBus",
-            Some("org.freedesktop.DBus.Peer"),
-            "Ping",
-            &(),
-        )?;
+        driver.call(|conn| {
+            atrium_portal_request::block_on(async {
+                conn.call_method(
+                    Some("org.freedesktop.DBus"),
+                    "/org/freedesktop/DBus",
+                    Some("org.freedesktop.DBus.Peer"),
+                    "Ping",
+                    &(),
+                )
+                .await
+            })
+        })?;
     }
 }
 

@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.0.36"
 edition = "2024"
 license = "MIT"
-rust-version = "1.88"
+rust-version = "1.89"
 repository = "https://github.com/atrium-desktop/xdg-desktop-portal-atrium"
 
 [workspace.dependencies]
@@ -23,6 +23,9 @@ env_logger = "0.11"
 # the workspace table as the single pinning point, so member manifests
 # must not restate versions.
 async-channel = "2"
+# zbus 6 exposes its message stream through `futures_core::Stream`, so a
+# consumer polls it with `StreamExt::next`.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 rand = "0.8"
 libc = "0.2"
 log = "0.4"
@@ -30,9 +33,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
 zeroize = "1.8"
-zbus = { version = "5", default-features = false, features = [
-    "async-io",
-    "blocking-api",
+# zbus 6 absorbed zvariant, zvariant_derive, and zbus_names (RUSTSEC-2026-0370
+# through -0372: all three are unmaintained as standalone crates). The blocking
+# API is gone in 6.0, so every caller drives the async API through
+# `zbus::block_on`; `default-rt` is what runs the connection's work on the
+# calling thread between polls, which is what keeps this thread-per-interface
+# daemon working without a shared runtime.
+zbus = { version = "6", default-features = false, features = [
+    "comms",
+    "default-rt",
+    "object-manager",
+    "proxy",
+    "service",
 ] }
 
 # Workspace-wide lint policy (ADR-0025). Every member inherits this table

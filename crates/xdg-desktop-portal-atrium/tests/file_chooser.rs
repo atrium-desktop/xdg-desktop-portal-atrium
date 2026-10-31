@@ -9,10 +9,11 @@ use atrium_arca_contract::{
     BytePath, Choice, FileChooserMode, FileChooserRequest, FileChooserResponse, FileFilter,
     FilterRule, FilterRuleKind,
 };
-use zbus::blocking::{Connection, Proxy};
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
+use zbus::{Connection, Proxy};
+use zbus::{ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
 
 mod common;
+use common::bus;
 use common::{
     KillOnDrop, daemon_command, die_with_parent, e2e_required, fake_chooser, frontend_binary,
     frontend_prerequisites, private_bus, temp_dir, wait_for_frontend, wait_for_name,
@@ -23,7 +24,7 @@ const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
 const IFACE: &str = "org.freedesktop.impl.portal.FileChooser";
 
 fn chooser(conn: &Connection) -> Proxy<'_> {
-    Proxy::new(conn, PORTAL, DESKTOP_PATH, IFACE).expect("file chooser proxy")
+    bus::proxy(conn, PORTAL, DESKTOP_PATH, IFACE)
 }
 
 fn call_chooser(
@@ -31,26 +32,26 @@ fn call_chooser(
     method: &str,
     parent: &str,
     title: &str,
-    options: HashMap<String, Value<'_>>,
+    options: HashMap<String, Variant<'_>>,
     serial: u32,
-) -> (u32, HashMap<String, OwnedValue>) {
+) -> (u32, HashMap<String, OwnedVariant>) {
     let handle = ObjectPath::try_from(format!(
         "/org/freedesktop/portal/desktop/request/1/fc{serial}"
     ))
     .expect("request handle path");
-    proxy
-        .call(
-            method,
-            &(handle, "dev.tessera.smoke", parent, title, options),
-        )
-        .unwrap_or_else(|error| panic!("{method} must succeed at the bus level: {error}"))
+    bus::try_call(
+        proxy,
+        method,
+        &(handle, "dev.tessera.smoke", parent, title, options),
+    )
+    .unwrap_or_else(|error| panic!("{method} must succeed at the bus level: {error}"))
 }
 
-fn result_uris(results: &HashMap<String, OwnedValue>) -> Vec<String> {
+fn result_uris(results: &HashMap<String, OwnedVariant>) -> Vec<String> {
     let uris = results
         .get("uris")
         .unwrap_or_else(|| panic!("results must contain uris: {results:?}"));
-    Vec::<String>::try_from(Value::from(uris.clone())).expect("uris is a string array")
+    Vec::<String>::try_from(Variant::from(uris.clone())).expect("uris is a string array")
 }
 
 /// Write one scripted arca reply: the versioned envelope ADR-0027 defines.
@@ -169,15 +170,15 @@ fn file_chooser_end_to_end() {
         "utf8".to_owned(),
     )];
     let mut options = HashMap::new();
-    options.insert("modal".to_owned(), Value::from(false));
-    options.insert("multiple".to_owned(), Value::from(true));
-    options.insert("accept_label".to_owned(), Value::from("Import"));
-    options.insert("filters".to_owned(), Value::from(filters));
-    options.insert("current_filter".to_owned(), Value::from(current_filter));
-    options.insert("choices".to_owned(), Value::from(choices));
+    options.insert("modal".to_owned(), Variant::from(false));
+    options.insert("multiple".to_owned(), Variant::from(true));
+    options.insert("accept_label".to_owned(), Variant::from("Import"));
+    options.insert("filters".to_owned(), Variant::from(filters));
+    options.insert("current_filter".to_owned(), Variant::from(current_filter));
+    options.insert("choices".to_owned(), Variant::from(choices));
     options.insert(
         "current_folder".to_owned(),
-        Value::from(b"/tmp/images\0".to_vec()),
+        Variant::from(b"/tmp/images\0".to_vec()),
     );
     let (response, results) = call_chooser(
         &chooser_proxy,
@@ -216,7 +217,7 @@ fn file_chooser_end_to_end() {
     let mut options = HashMap::new();
     options.insert(
         "current_file".to_owned(),
-        Value::from(b"/tmp/existing.png\0".to_vec()),
+        Variant::from(b"/tmp/existing.png\0".to_vec()),
     );
     let (response, results) = call_chooser(&chooser_proxy, "SaveFile", "", "Save it", options, 2);
     assert_eq!(response, 0, "SaveFile must succeed: {results:?}");
@@ -231,7 +232,7 @@ fn file_chooser_end_to_end() {
     let mut options = HashMap::new();
     options.insert(
         "files".to_owned(),
-        Value::from(vec![b"one.txt\0".to_vec(), b"two.txt\0".to_vec()]),
+        Variant::from(vec![b"one.txt\0".to_vec(), b"two.txt\0".to_vec()]),
     );
     let (response, results) =
         call_chooser(&chooser_proxy, "SaveFiles", "", "Save them", options, 3);
@@ -266,10 +267,7 @@ fn file_chooser_end_to_end() {
     let bus_address = bus.address().to_owned();
     let started = std::time::Instant::now();
     let pending = std::thread::spawn(move || {
-        let connection = zbus::blocking::connection::Builder::address(bus_address.as_str())
-            .unwrap()
-            .build()
-            .unwrap();
+        let connection = bus::connect(&bus_address);
         let chooser = chooser(&connection);
         call_chooser(&chooser, "OpenFile", "", "Close it", HashMap::new(), 5)
     });
@@ -285,10 +283,7 @@ fn file_chooser_end_to_end() {
     let bus_address = bus.address().to_owned();
     let (concurrent_tx, concurrent_rx) = std::sync::mpsc::channel();
     let concurrent = std::thread::spawn(move || {
-        let connection = zbus::blocking::connection::Builder::address(bus_address.as_str())
-            .unwrap()
-            .build()
-            .unwrap();
+        let connection = bus::connect(&bus_address);
         let chooser = chooser(&connection);
         let result = call_chooser(&chooser, "OpenFile", "", "Concurrent", HashMap::new(), 6);
         concurrent_tx.send(result).unwrap();
@@ -300,14 +295,13 @@ fn file_chooser_end_to_end() {
     assert_eq!(result_uris(&results), ["file:///tmp/concurrent.txt"]);
     concurrent.join().unwrap();
 
-    let request = Proxy::new(
+    let request = bus::proxy(
         &conn,
         PORTAL,
         "/org/freedesktop/portal/desktop/request/1/fc5",
         "org.freedesktop.impl.portal.Request",
-    )
-    .unwrap();
-    let _: () = request.call("Close", &()).unwrap();
+    );
+    bus::call::<(), ()>(&request, "Close", &());
     let (response, _) = pending.join().unwrap();
     assert_eq!(response, 1);
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
@@ -333,7 +327,7 @@ fn public_frontend_routes_file_chooser_and_returns_response() {
         eprintln!("public frontend test: {reason}, skipping");
         return;
     }
-    let frontend = frontend_binary().expect("checked by frontend_prerequisites");
+    let _frontend = frontend_binary();
     let conn = bus.connect();
 
     let root = temp_dir("file-chooser-frontend");
@@ -401,6 +395,7 @@ fn public_frontend_routes_file_chooser_and_returns_response() {
     wait_for_name(&conn, PORTAL);
 
     let frontend_log = root.join("frontend.log");
+    let frontend = frontend_binary().expect("checked by frontend_prerequisites");
     let mut frontend_command = Command::new(frontend);
     frontend_command
         .env("DBUS_SESSION_BUS_ADDRESS", bus.address())
@@ -433,13 +428,12 @@ fn public_frontend_routes_file_chooser_and_returns_response() {
         return;
     }
 
-    let chooser = Proxy::new(
+    let chooser = bus::proxy(
         &conn,
         "org.freedesktop.portal.Desktop",
         DESKTOP_PATH,
         "org.freedesktop.portal.FileChooser",
-    )
-    .expect("public FileChooser proxy");
+    );
     let token = "atrium_file_chooser_frontend_1";
     let sender = conn
         .unique_name()
@@ -448,30 +442,30 @@ fn public_frontend_routes_file_chooser_and_returns_response() {
         .trim_start_matches(':')
         .replace('.', "_");
     let expected_handle = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
-    let request = Proxy::new(
+    let request = bus::proxy(
         &conn,
         "org.freedesktop.portal.Desktop",
         expected_handle.as_str(),
         "org.freedesktop.portal.Request",
-    )
-    .expect("public request proxy");
-    let mut responses = request
-        .receive_signal("Response")
-        .expect("subscribe Response");
+    );
+    let mut responses = bus::run(request.receive_signal("Response")).expect("subscribe Response");
 
-    let mut options: HashMap<String, Value<'_>> = HashMap::new();
-    options.insert("handle_token".to_owned(), Value::from(token));
-    options.insert("multiple".to_owned(), Value::from(false));
-    let returned: OwnedObjectPath = chooser
-        .call("OpenFile", &("", "Choose through frontend", options))
-        .unwrap_or_else(|error| {
-            let log = std::fs::read_to_string(&frontend_log).unwrap_or_default();
-            panic!("public OpenFile failed: {error}\nfrontend log:\n{log}")
-        });
+    let mut options: HashMap<String, Variant<'_>> = HashMap::new();
+    options.insert("handle_token".to_owned(), Variant::from(token));
+    options.insert("multiple".to_owned(), Variant::from(false));
+    let returned: OwnedObjectPath = bus::try_call::<_, OwnedObjectPath>(
+        &chooser,
+        "OpenFile",
+        &("", "Choose through frontend", options),
+    )
+    .unwrap_or_else(|error| {
+        let log = std::fs::read_to_string(&frontend_log).unwrap_or_default();
+        panic!("public OpenFile failed: {error}\nfrontend log:\n{log}")
+    });
     assert_eq!(returned.as_str(), expected_handle);
 
-    let response = responses.next().expect("portal must emit Response");
-    let (code, results): (u32, HashMap<String, OwnedValue>) =
+    let response = bus::next_signal(&mut responses);
+    let (code, results): (u32, HashMap<String, OwnedVariant>) =
         response.body().deserialize().expect("Response body");
     if code != 0 {
         let backend_log = std::fs::read_to_string(&backend_log).unwrap_or_default();

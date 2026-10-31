@@ -12,7 +12,7 @@ use std::sync::{Arc, RwLock};
 
 use atrium_portal_ipc::{ColorScheme, Contrast, DesktopPreferences};
 use atrium_portal_request::sync;
-use zbus::zvariant::{OwnedValue, Str, Structure};
+use zbus::{OwnedVariant, Str, Structure};
 
 pub(crate) const APPEARANCE_NAMESPACE: &str = "org.freedesktop.appearance";
 pub(crate) const GTK_INTERFACE_NAMESPACE: &str = "org.gnome.desktop.interface";
@@ -60,18 +60,18 @@ enum SettingsError {
     ZBus(zbus::Error),
 }
 
-fn string_value(value: &str) -> OwnedValue {
-    OwnedValue::from(Str::from(value.to_owned()))
+fn string_value(value: &str) -> OwnedVariant {
+    OwnedVariant::from(Str::from(value.to_owned()))
 }
 
-fn structure_value<T>(value: T) -> OwnedValue
+fn structure_value<T>(value: T) -> OwnedVariant
 where
     Structure<'static>: From<T>,
 {
     // Infallible for the fully-owned static structures built here: the
     // try_from exists only for borrowed variants this function never
     // produces.
-    OwnedValue::try_from(Structure::from(value)).expect("owned static setting structure")
+    OwnedVariant::try_from(Structure::from(value)).expect("owned static setting structure")
 }
 
 fn portal_color_scheme(value: ColorScheme) -> u32 {
@@ -92,17 +92,17 @@ fn gtk_color_scheme(value: ColorScheme) -> &'static str {
 
 fn setting_entries(
     preferences: &DesktopPreferences,
-) -> Vec<(&'static str, &'static str, OwnedValue)> {
+) -> Vec<(&'static str, &'static str, OwnedVariant)> {
     let mut entries = vec![
         (
             APPEARANCE_NAMESPACE,
             COLOR_SCHEME_KEY,
-            OwnedValue::from(portal_color_scheme(preferences.color_scheme)),
+            OwnedVariant::from(portal_color_scheme(preferences.color_scheme)),
         ),
         (
             APPEARANCE_NAMESPACE,
             CONTRAST_KEY,
-            OwnedValue::from(match preferences.contrast {
+            OwnedVariant::from(match preferences.contrast {
                 Contrast::Normal => 0_u32,
                 Contrast::High => 1_u32,
             }),
@@ -110,7 +110,7 @@ fn setting_entries(
         (
             APPEARANCE_NAMESPACE,
             REDUCED_MOTION_KEY,
-            OwnedValue::from(u32::from(preferences.reduced_motion)),
+            OwnedVariant::from(u32::from(preferences.reduced_motion)),
         ),
         (
             GTK_INTERFACE_NAMESPACE,
@@ -130,7 +130,7 @@ fn setting_entries(
         (
             GTK_INTERFACE_NAMESPACE,
             "text-scaling-factor",
-            OwnedValue::from(preferences.text_scale),
+            OwnedVariant::from(preferences.text_scale),
         ),
         (
             GTK_INTERFACE_NAMESPACE,
@@ -145,12 +145,12 @@ fn setting_entries(
         (
             GTK_INTERFACE_NAMESPACE,
             "cursor-size",
-            OwnedValue::from(preferences.cursor_size as i32),
+            OwnedVariant::from(preferences.cursor_size as i32),
         ),
         (
             GTK_INTERFACE_NAMESPACE,
             "enable-animations",
-            OwnedValue::from(!preferences.reduced_motion),
+            OwnedVariant::from(!preferences.reduced_motion),
         ),
     ];
     if let Some(accent) = preferences.accent_color {
@@ -167,7 +167,7 @@ pub(crate) fn lookup(
     preferences: &DesktopPreferences,
     namespace: &str,
     key: &str,
-) -> Option<OwnedValue> {
+) -> Option<OwnedVariant> {
     setting_entries(preferences).into_iter().find_map(
         |(candidate_namespace, candidate_key, value)| {
             (candidate_namespace == namespace && candidate_key == key).then_some(value)
@@ -186,8 +186,8 @@ fn namespace_matches(pattern: &str, namespace: &str) -> bool {
 fn read_all_values(
     preferences: &DesktopPreferences,
     namespaces: &[String],
-) -> HashMap<String, HashMap<String, OwnedValue>> {
-    let mut out: HashMap<String, HashMap<String, OwnedValue>> = HashMap::new();
+) -> HashMap<String, HashMap<String, OwnedVariant>> {
+    let mut out: HashMap<String, HashMap<String, OwnedVariant>> = HashMap::new();
     for (namespace, key, value) in setting_entries(preferences) {
         let wanted = namespaces.is_empty()
             || namespaces
@@ -205,13 +205,13 @@ fn read_all_values(
 fn changed_settings(
     previous: &DesktopPreferences,
     current: &DesktopPreferences,
-) -> Vec<(&'static str, &'static str, OwnedValue)> {
+) -> Vec<(&'static str, &'static str, OwnedVariant)> {
     let mut changed = Vec::new();
     if previous.color_scheme != current.color_scheme {
         changed.push((
             APPEARANCE_NAMESPACE,
             COLOR_SCHEME_KEY,
-            OwnedValue::from(portal_color_scheme(current.color_scheme)),
+            OwnedVariant::from(portal_color_scheme(current.color_scheme)),
         ));
         changed.push((
             GTK_INTERFACE_NAMESPACE,
@@ -231,7 +231,7 @@ fn changed_settings(
         changed.push((
             APPEARANCE_NAMESPACE,
             CONTRAST_KEY,
-            OwnedValue::from(match current.contrast {
+            OwnedVariant::from(match current.contrast {
                 Contrast::Normal => 0_u32,
                 Contrast::High => 1_u32,
             }),
@@ -241,12 +241,12 @@ fn changed_settings(
         changed.push((
             APPEARANCE_NAMESPACE,
             REDUCED_MOTION_KEY,
-            OwnedValue::from(u32::from(current.reduced_motion)),
+            OwnedVariant::from(u32::from(current.reduced_motion)),
         ));
         changed.push((
             GTK_INTERFACE_NAMESPACE,
             "enable-animations",
-            OwnedValue::from(!current.reduced_motion),
+            OwnedVariant::from(!current.reduced_motion),
         ));
     }
     if previous.font_name != current.font_name {
@@ -267,7 +267,7 @@ fn changed_settings(
         changed.push((
             GTK_INTERFACE_NAMESPACE,
             "text-scaling-factor",
-            OwnedValue::from(current.text_scale),
+            OwnedVariant::from(current.text_scale),
         ));
     }
     if previous.icon_theme != current.icon_theme {
@@ -288,14 +288,14 @@ fn changed_settings(
         changed.push((
             GTK_INTERFACE_NAMESPACE,
             "cursor-size",
-            OwnedValue::from(current.cursor_size as i32),
+            OwnedVariant::from(current.cursor_size as i32),
         ));
     }
     changed
 }
 
 fn update_and_emit(
-    conn: &zbus::blocking::Connection,
+    conn: &zbus::Connection,
     store: &SettingsStore,
     preferences: DesktopPreferences,
 ) {
@@ -303,20 +303,20 @@ fn update_and_emit(
     // The compositor skins its own notification cards from the same desktop
     // preferences it publishes, so there is nothing to re-push (ADR-0026).
     for (namespace, key, value) in changed_settings(&previous, &preferences) {
-        if let Err(error) = conn.emit_signal(
+        if let Err(error) = atrium_portal_request::block_on(conn.emit_signal(
             None::<&str>,
             crate::DESKTOP_PATH,
             SETTINGS_IFACE,
             "SettingChanged",
             &(namespace, key, value),
-        ) {
+        )) {
             log::warn!("portal: could not emit SettingChanged for {namespace}/{key}: {error}");
         }
     }
 }
 
 pub(crate) fn spawn_watcher(
-    conn: zbus::blocking::Connection,
+    conn: zbus::Connection,
     socket: PathBuf,
     store: SettingsStore,
 ) -> std::io::Result<()> {
@@ -349,7 +349,7 @@ pub(crate) fn prime_store(socket: &Path, store: &SettingsStore) {
     }
 }
 
-fn watch_loop(conn: zbus::blocking::Connection, socket: PathBuf, store: SettingsStore) {
+fn watch_loop(conn: zbus::Connection, socket: PathBuf, store: SettingsStore) {
     let mut reported_disconnect = false;
     loop {
         match watch_connection(&conn, &socket, &store) {
@@ -379,7 +379,7 @@ fn watch_loop(conn: zbus::blocking::Connection, socket: PathBuf, store: Settings
 }
 
 fn watch_connection(
-    conn: &zbus::blocking::Connection,
+    conn: &zbus::Connection,
     socket: &Path,
     store: &SettingsStore,
 ) -> std::io::Result<()> {
@@ -410,7 +410,7 @@ fn watch_connection(
 #[zbus::interface(name = "org.freedesktop.impl.portal.Settings")]
 impl SettingsIface {
     /// `v Read(s namespace, s key)`.
-    async fn read(&self, namespace: &str, key: &str) -> Result<OwnedValue, SettingsError> {
+    async fn read(&self, namespace: &str, key: &str) -> Result<OwnedVariant, SettingsError> {
         lookup(&self.store.snapshot(), namespace, key)
             .ok_or_else(|| SettingsError::NotFound(format!("{namespace} {key}")))
     }
@@ -421,7 +421,7 @@ impl SettingsIface {
     async fn read_all(
         &self,
         namespaces: Vec<String>,
-    ) -> HashMap<String, HashMap<String, OwnedValue>> {
+    ) -> HashMap<String, HashMap<String, OwnedVariant>> {
         read_all_values(&self.store.snapshot(), &namespaces)
     }
 
@@ -437,7 +437,7 @@ impl SettingsIface {
         emitter: &zbus::object_server::SignalEmitter<'_>,
         namespace: &str,
         key: &str,
-        value: zbus::zvariant::Value<'_>,
+        value: zbus::Variant<'_>,
     ) -> zbus::Result<()>;
 }
 

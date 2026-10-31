@@ -9,10 +9,10 @@
 use std::collections::HashMap;
 
 use atrium_portal_ipc::AppPickResult;
-use zbus::blocking::Proxy;
-use zbus::zvariant::{ObjectPath, OwnedValue, Value};
+use zbus::{ObjectPath, OwnedVariant, Variant};
 
 mod common;
+use common::bus;
 use common::fake_compositor::FakeCompositor;
 use common::{KillOnDrop, daemon_command, e2e_required, private_bus, temp_dir, wait_for_name};
 
@@ -64,14 +64,17 @@ fn seed_handlers(data_dir: &std::path::Path, marker: &std::path::Path) -> String
     marker.display().to_string()
 }
 
-fn open_uri(conn: &zbus::blocking::Connection, uri: &str) -> (u32, HashMap<String, OwnedValue>) {
-    let open = Proxy::new(conn, PORTAL, DESKTOP_PATH, IFACE).expect("open uri proxy");
+fn open_uri(conn: &zbus::Connection, uri: &str) -> (u32, HashMap<String, OwnedVariant>) {
+    let open = bus::proxy(conn, PORTAL, DESKTOP_PATH, IFACE);
     let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1/uri1")
         .expect("request handle path");
-    let mut options: HashMap<String, Value<'_>> = HashMap::new();
-    options.insert("ask".to_owned(), Value::from(true));
-    open.call("OpenURI", &(handle, "dev.tessera.smoke", "", uri, options))
-        .expect("OpenURI")
+    let mut options: HashMap<String, Variant<'_>> = HashMap::new();
+    options.insert("ask".to_owned(), Variant::from(true));
+    bus::call(
+        &open,
+        "OpenURI",
+        &(handle, "dev.tessera.smoke", "", uri, options),
+    )
 }
 
 #[test]

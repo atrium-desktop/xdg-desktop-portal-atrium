@@ -14,7 +14,7 @@ use atrium_arca_contract::{
     FilterRule, FilterRuleKind,
 };
 use atrium_portal_request::{PortalResponse, RequestTracker, ResponseSender, sync};
-use zbus::zvariant::{ObjectPath, Value};
+use zbus::{ObjectPath, Variant};
 
 use crate::companion::arca;
 use crate::uri;
@@ -47,7 +47,7 @@ impl FileChooserIface {
         app_id: &str,
         parent_window: &str,
         title: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let parsed = parse_options(&options);
         let request = FileChooserRequest {
@@ -79,7 +79,7 @@ impl FileChooserIface {
         app_id: &str,
         parent_window: &str,
         title: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let parsed = parse_options(&options);
         let request = FileChooserRequest {
@@ -107,7 +107,7 @@ impl FileChooserIface {
         app_id: &str,
         parent_window: &str,
         title: &str,
-        options: HashMap<String, Value<'_>>,
+        options: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<PortalResponse> {
         let parsed = parse_options(&options);
         let request = FileChooserRequest {
@@ -225,7 +225,7 @@ fn run_pick(
     tracker: &Arc<Mutex<RequestTracker>>,
     request_path: &str,
     request: FileChooserRequest,
-) -> (u32, HashMap<String, Value<'static>>) {
+) -> (u32, HashMap<String, Variant<'static>>) {
     if sync::lock(tracker, "file chooser tracker").was_closed(request_path) {
         return cancelled();
     }
@@ -286,31 +286,31 @@ fn build_results(
     paths: Vec<BytePath>,
     current_filter: Option<FileFilter>,
     choices: Vec<(String, String)>,
-) -> (usize, HashMap<String, Value<'static>>) {
+) -> (usize, HashMap<String, Variant<'static>>) {
     let uris: Vec<String> = paths
         .into_iter()
         .filter(|path| !path.is_empty())
         .map(|path| uri::file_uri(&path.to_path_buf()))
         .collect();
     let count = uris.len();
-    let mut results = HashMap::from([("uris".to_owned(), Value::from(uris))]);
+    let mut results = HashMap::from([("uris".to_owned(), Variant::from(uris))]);
     if let Some(filter) = current_filter {
         results.insert(
             "current_filter".to_owned(),
-            Value::Structure(zbus::zvariant::Structure::from(filter_to_wire(filter))),
+            Variant::Structure(zbus::Structure::from(filter_to_wire(filter))),
         );
     }
     if !choices.is_empty() {
-        results.insert("choices".to_owned(), Value::from(choices));
+        results.insert("choices".to_owned(), Variant::from(choices));
     }
     (count, results)
 }
 
-fn cancelled() -> (u32, HashMap<String, Value<'static>>) {
+fn cancelled() -> (u32, HashMap<String, Variant<'static>>) {
     (1, HashMap::new())
 }
 
-fn failed() -> (u32, HashMap<String, Value<'static>>) {
+fn failed() -> (u32, HashMap<String, Variant<'static>>) {
     (2, HashMap::new())
 }
 
@@ -332,7 +332,7 @@ struct ParsedOptions {
     save_files: Vec<BytePath>,
 }
 
-fn parse_options(options: &HashMap<String, Value<'_>>) -> ParsedOptions {
+fn parse_options(options: &HashMap<String, Variant<'_>>) -> ParsedOptions {
     let get_bool = |key: &str, default| {
         options
             .get(key)
@@ -451,8 +451,8 @@ fn filter_from_wire((label, rules): (String, Vec<(u32, String)>)) -> FileFilter 
     }
 }
 
-fn filter_from_value(value: &Value<'_>) -> Option<(String, Vec<(u32, String)>)> {
-    let Value::Structure(structure) = value else {
+fn filter_from_value(value: &Variant<'_>) -> Option<(String, Vec<(u32, String)>)> {
+    let Variant::Structure(structure) = value else {
         return None;
     };
     let [label, rules] = structure.fields() else {
@@ -485,7 +485,7 @@ mod tests {
 
     use super::*;
 
-    fn options(pairs: &[(&str, Value<'static>)]) -> HashMap<String, Value<'static>> {
+    fn options(pairs: &[(&str, Variant<'static>)]) -> HashMap<String, Variant<'static>> {
         pairs
             .iter()
             .map(|(key, value)| ((*key).to_owned(), value.clone()))
@@ -509,7 +509,7 @@ mod tests {
         ];
         let parsed = parse_options(&options(&[(
             "filters",
-            Value::from(vec![("Images".to_owned(), rules)]),
+            Variant::from(vec![("Images".to_owned(), rules)]),
         )]));
         assert_eq!(parsed.filters.len(), 1);
         assert_eq!(parsed.filters[0].rules[0].kind, FilterRuleKind::Glob);
@@ -520,7 +520,7 @@ mod tests {
     fn path_options_require_one_trailing_nul_and_reject_interior_nuls() {
         let parsed = parse_options(&options(&[(
             "current_folder",
-            Value::from(b"/tmp/docs\0".to_vec()),
+            Variant::from(b"/tmp/docs\0".to_vec()),
         )]));
         assert_eq!(
             parsed.current_folder.unwrap().to_path_buf(),
@@ -528,17 +528,17 @@ mod tests {
         );
         let parsed = parse_options(&options(&[(
             "current_folder",
-            Value::from(b"/tmp\0/docs\0".to_vec()),
+            Variant::from(b"/tmp\0/docs\0".to_vec()),
         )]));
         assert!(parsed.current_folder.is_none());
         let parsed = parse_options(&options(&[(
             "current_folder",
-            Value::from(b"/tmp/docs".to_vec()),
+            Variant::from(b"/tmp/docs".to_vec()),
         )]));
         assert!(parsed.current_folder.is_none());
         let parsed = parse_options(&options(&[(
             "current_folder",
-            Value::from(b"relative\0".to_vec()),
+            Variant::from(b"relative\0".to_vec()),
         )]));
         assert!(parsed.current_folder.is_none());
     }
@@ -557,13 +557,13 @@ mod tests {
             Some(filter),
             vec![("encoding".into(), "utf8".into())],
         );
-        let Value::Array(uris) = &results["uris"] else {
+        let Variant::Array(uris) = &results["uris"] else {
             panic!("uris must be an array");
         };
         let uri = String::try_from(uris.iter().next().unwrap()).unwrap();
         assert_eq!(uri, "file:///tmp/a%20file.png");
         assert!(results.contains_key("current_filter"));
-        let Value::Array(choices) = &results["choices"] else {
+        let Variant::Array(choices) = &results["choices"] else {
             panic!("choices must be an array");
         };
         assert_eq!(choices.len(), 1);
@@ -573,7 +573,7 @@ mod tests {
     fn save_files_accepts_strings_and_byte_arrays() {
         let parsed_strings = parse_options(&options(&[(
             "files",
-            Value::from(vec!["doc.txt".to_owned(), "photo.png".to_owned()]),
+            Variant::from(vec!["doc.txt".to_owned(), "photo.png".to_owned()]),
         )]));
         assert_eq!(parsed_strings.save_files.len(), 2);
         assert_eq!(
@@ -587,7 +587,7 @@ mod tests {
 
         let parsed_bytes = parse_options(&options(&[(
             "files",
-            Value::from(vec![b"one.txt\0".to_vec(), b"two.txt\0".to_vec()]),
+            Variant::from(vec![b"one.txt\0".to_vec(), b"two.txt\0".to_vec()]),
         )]));
         assert_eq!(parsed_bytes.save_files.len(), 2);
         assert_eq!(
@@ -603,8 +603,8 @@ mod tests {
     #[test]
     fn current_file_and_current_name_accept_resilient_types() {
         let parsed = parse_options(&options(&[
-            ("current_file", Value::from(b"/tmp/input.png\0".to_vec())),
-            ("current_name", Value::from("output.png".to_owned())),
+            ("current_file", Variant::from(b"/tmp/input.png\0".to_vec())),
+            ("current_name", Variant::from("output.png".to_owned())),
         ]));
         assert_eq!(
             parsed.current_file.unwrap().to_path_buf(),
@@ -613,8 +613,8 @@ mod tests {
         assert_eq!(parsed.current_name.as_deref(), Some("output.png"));
 
         let parsed_bytes_name = parse_options(&options(&[
-            ("current_file", Value::from(b"/tmp/other.png\0".to_vec())),
-            ("current_name", Value::from(b"named.png\0".to_vec())),
+            ("current_file", Variant::from(b"/tmp/other.png\0".to_vec())),
+            ("current_name", Variant::from(b"named.png\0".to_vec())),
         ]));
         assert_eq!(
             parsed_bytes_name.current_file.unwrap().to_path_buf(),

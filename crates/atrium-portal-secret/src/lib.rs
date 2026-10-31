@@ -30,18 +30,29 @@ impl SecretService {
         Self
     }
 
+    /// Export the Secret interface at `path`.
+    ///
+    /// Takes the async `zbus::Connection` (zbus 6 has no blocking one) and an
+    /// [`atrium_portal_request::Driver`] to install the object on the thread
+    /// that drives that connection: the caller is a synchronous assembly path
+    /// and must not drive the connection itself.
     pub fn register_portal(
         &self,
-        conn: &zbus::blocking::Connection,
+        driver: &atrium_portal_request::Driver,
+        conn: &zbus::Connection,
         tracker: Arc<Mutex<RequestTracker>>,
-        path: &str,
+        path: &'static str,
     ) -> Result<(), SecretError> {
         let iface = portal::SecretIface {
             conn: conn.clone(),
             tracker,
         };
-        conn.object_server()
-            .at(path, iface)
+        driver
+            .call(move |conn| {
+                atrium_portal_request::block_on(async {
+                    conn.object_server().at(path, iface).await
+                })
+            })
             .map_err(|e| SecretError::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
     }

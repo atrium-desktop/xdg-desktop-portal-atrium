@@ -2,7 +2,7 @@
 
 ## Install Dependencies
 
-Install Rust 1.88 or newer, `pkg-config`, the PipeWire development packages
+Install Rust 1.89 or newer, `pkg-config`, the PipeWire development packages
 (`libpipewire-0.3-dev`, `libspa-0.2-dev`), and `xdg-desktop-portal`.
 
 Runtime components, none of which is a build dependency:

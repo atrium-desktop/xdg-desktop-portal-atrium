@@ -14,10 +14,10 @@ use atrium_portal_ipc::testing::{
 use atrium_portal_ipc::{
     ConfirmPickResult, PickKind, PickResult, StreamCursorMode, StreamPixelFormat, StreamTarget,
 };
-use zbus::blocking::Proxy;
-use zbus::zvariant::{ObjectPath, OwnedValue, Value};
+use zbus::{ObjectPath, OwnedVariant, Variant};
 
 mod common;
+use common::bus;
 use common::{KillOnDrop, daemon_command, private_bus, temp_dir, wait_for_name};
 
 const PORTAL: &str = "org.freedesktop.impl.portal.desktop.atrium";
@@ -250,27 +250,25 @@ fn screenshot_and_color_cross_real_daemon_and_scoped_ipc() {
     let _daemon = KillOnDrop(backend.spawn().expect("spawn portal daemon"));
     wait_for_name(&conn, PORTAL);
 
-    let screenshot = Proxy::new(
+    let screenshot = bus::proxy(
         &conn,
         PORTAL,
         DESKTOP_PATH,
         "org.freedesktop.impl.portal.Screenshot",
-    )
-    .expect("Screenshot proxy");
+    );
     let mut options = HashMap::new();
-    options.insert("interactive".to_owned(), Value::from(true));
-    options.insert("target".to_owned(), Value::from(4_u32));
-    let (code, results): (u32, HashMap<String, OwnedValue>) = screenshot
-        .call(
-            "Screenshot",
-            &(
-                handle("/org/freedesktop/portal/desktop/request/1/shot1"),
-                "dev.tessera.MediaTest",
-                "",
-                options,
-            ),
-        )
-        .expect("Screenshot call");
+    options.insert("interactive".to_owned(), Variant::from(true));
+    options.insert("target".to_owned(), Variant::from(4_u32));
+    let (code, results): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screenshot,
+        "Screenshot",
+        &(
+            handle("/org/freedesktop/portal/desktop/request/1/shot1"),
+            "dev.tessera.MediaTest",
+            "",
+            options,
+        ),
+    );
     assert_eq!(code, 0, "interactive screenshot: {results:?}");
     let uri = String::try_from(results["uri"].clone()).expect("uri string");
     let path = uri.strip_prefix("file://").expect("local file URI");
@@ -284,21 +282,20 @@ fn screenshot_and_color_cross_real_daemon_and_scoped_ipc() {
         &[Some(atrium_portal_ipc::Rect::new(10, 20, 30, 40))]
     );
 
-    let (code, results): (u32, HashMap<String, OwnedValue>) = screenshot
-        .call(
-            "PickColor",
-            &(
-                handle("/org/freedesktop/portal/desktop/request/1/color1"),
-                "dev.tessera.MediaTest",
-                "",
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("PickColor call");
+    let (code, results): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screenshot,
+        "PickColor",
+        &(
+            handle("/org/freedesktop/portal/desktop/request/1/color1"),
+            "dev.tessera.MediaTest",
+            "",
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
     assert_eq!(code, 0, "PickColor: {results:?}");
-    let color = Value::from(results["color"].clone());
+    let color = Variant::from(results["color"].clone());
     assert_eq!(color.value_signature().to_string(), "(ddd)");
-    let Value::Structure(color) = color else {
+    let Variant::Structure(color) = color else {
         panic!("color must be a structure");
     };
     let channels: Vec<f64> = color
@@ -317,17 +314,16 @@ fn screenshot_and_color_cross_real_daemon_and_scoped_ipc() {
     // Legacy, noninteractive capture is fail-closed unless the frontend says
     // PermissionStore already approved it: an explicit compositor consent
     // must occur before any pixels are requested.
-    let (code, _): (u32, HashMap<String, OwnedValue>) = screenshot
-        .call(
-            "Screenshot",
-            &(
-                handle("/org/freedesktop/portal/desktop/request/1/shot2"),
-                "dev.tessera.MediaTest",
-                "",
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("legacy Screenshot call");
+    let (code, _): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screenshot,
+        "Screenshot",
+        &(
+            handle("/org/freedesktop/portal/desktop/request/1/shot2"),
+            "dev.tessera.MediaTest",
+            "",
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
     assert_eq!(code, 0);
     assert_eq!(fake.confirms.lock().unwrap().len(), 1);
     assert_eq!(fake.captures.lock().unwrap().len(), 2);
@@ -572,28 +568,29 @@ fn wait_consumer(
     }
 }
 
-fn stream_details(results: &HashMap<String, OwnedValue>) -> (u32, u64) {
-    let streams = Value::from(results["streams"].clone());
-    let Value::Array(streams) = streams else {
+fn stream_details(results: &HashMap<String, OwnedVariant>) -> (u32, u64) {
+    let streams = Variant::from(results["streams"].clone());
+    let Variant::Array(streams) = streams else {
         panic!("streams result must be an array");
     };
-    let Value::Structure(stream) = streams.get(0).expect("read stream").expect("one stream") else {
+    let Variant::Structure(stream) = streams.get(0).expect("read stream").expect("one stream")
+    else {
         panic!("stream entry must be a structure");
     };
     let node_id = u32::try_from(&stream.fields()[0]).expect("PipeWire node id");
-    let Value::Dict(properties) = &stream.fields()[1] else {
+    let Variant::Dict(properties) = &stream.fields()[1] else {
         panic!("stream properties must be a dict");
     };
     let serial = properties
         .iter()
         .find_map(|(key, value)| {
-            let Value::Str(key) = key else {
+            let Variant::Str(key) = key else {
                 return None;
             };
             if key.as_str() != "pipewire-serial" {
                 return None;
             }
-            let Value::Value(value) = value else {
+            let Variant::Variant(value) = value else {
                 return None;
             };
             u64::try_from(value.as_ref()).ok()
@@ -636,81 +633,75 @@ fn screencast_republishes_compositor_frames_through_real_pipewire() {
     let _daemon = KillOnDrop(backend.spawn().expect("spawn portal daemon"));
     wait_for_name(&conn, PORTAL);
 
-    let screencast = Proxy::new(
+    let screencast = bus::proxy(
         &conn,
         PORTAL,
         DESKTOP_PATH,
         "org.freedesktop.impl.portal.ScreenCast",
-    )
-    .expect("ScreenCast proxy");
+    );
     let session_path = "/org/freedesktop/portal/desktop/session/1/cast1";
-    let (code, _): (u32, HashMap<String, OwnedValue>) = screencast
-        .call(
-            "CreateSession",
-            &(
-                handle("/org/freedesktop/portal/desktop/request/1/create1"),
-                handle(session_path),
-                "",
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("CreateSession");
+    let (code, _): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screencast,
+        "CreateSession",
+        &(
+            handle("/org/freedesktop/portal/desktop/request/1/create1"),
+            handle(session_path),
+            "",
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
     assert_eq!(code, 0, "host applications have an empty backend app_id");
 
-    let (code, _): (u32, HashMap<String, OwnedValue>) = screencast
-        .call(
-            "SelectSources",
-            &(
-                handle("/org/freedesktop/portal/desktop/request/1/select1"),
-                handle(session_path),
-                "",
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("SelectSources");
+    let (code, _): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screencast,
+        "SelectSources",
+        &(
+            handle("/org/freedesktop/portal/desktop/request/1/select1"),
+            handle(session_path),
+            "",
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
     assert_eq!(code, 0);
 
     // Regression: OBS's unified "Screen Capture (PipeWire)" source offers
     // monitor|window (0b11); the backend must accept the mask and serve its
     // monitor subset instead of rejecting the mixed offer.
     let mix_session_path = "/org/freedesktop/portal/desktop/session/1/cast_mix";
-    let (code, _): (u32, HashMap<String, OwnedValue>) = screencast
-        .call(
-            "CreateSession",
-            &(
-                handle("/org/freedesktop/portal/desktop/request/1/create_mix"),
-                handle(mix_session_path),
-                "",
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("CreateSession (mixed types)");
+    let (code, _): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screencast,
+        "CreateSession",
+        &(
+            handle("/org/freedesktop/portal/desktop/request/1/create_mix"),
+            handle(mix_session_path),
+            "",
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
     assert_eq!(code, 0);
-    let (code, _): (u32, HashMap<String, OwnedValue>) = screencast
-        .call(
-            "SelectSources",
-            &(
-                handle("/org/freedesktop/portal/desktop/request/1/select_mix"),
-                handle(mix_session_path),
-                "",
-                HashMap::from([("types".to_string(), Value::from(0b11_u32))]),
-            ),
-        )
-        .expect("SelectSources (mixed types)");
+    let (code, _): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screencast,
+        "SelectSources",
+        &(
+            handle("/org/freedesktop/portal/desktop/request/1/select_mix"),
+            handle(mix_session_path),
+            "",
+            HashMap::from([("types".to_string(), Variant::from(0b11_u32))]),
+        ),
+    );
     assert_eq!(code, 0, "monitor|window offer must be served as monitor");
 
-    let (code, results): (u32, HashMap<String, OwnedValue>) = screencast
-        .call(
-            "Start",
-            &(
-                handle("/org/freedesktop/portal/desktop/request/1/start1"),
-                handle(session_path),
-                "",
-                "",
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("Start");
+    let (code, results): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screencast,
+        "Start",
+        &(
+            handle("/org/freedesktop/portal/desktop/request/1/start1"),
+            handle(session_path),
+            "",
+            "",
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
     assert_eq!(code, 0, "ScreenCast Start: {results:?}");
     let (node_id, serial) = stream_details(&results);
     assert_ne!(node_id, u32::MAX, "PipeWire node id must be valid");
@@ -760,14 +751,13 @@ fn screencast_republishes_compositor_frames_through_real_pipewire() {
         [7; 16]
     );
 
-    let session = Proxy::new(
+    let session = bus::proxy(
         &conn,
         PORTAL,
         session_path,
         "org.freedesktop.impl.portal.Session",
-    )
-    .expect("Session proxy");
-    let _: () = session.call("Close", &()).expect("Session.Close");
+    );
+    let _: () = bus::call(&session, "Close", &());
     let deadline = Instant::now() + Duration::from_secs(5);
     while fake.stream_disconnects.lock().unwrap().is_empty() {
         assert!(
@@ -844,60 +834,52 @@ impl Drop for DmabufCastFixture {
     }
 }
 
-fn start_cast_session(
-    conn: &zbus::blocking::Connection,
-    session_path: &str,
-    tag: &str,
-) -> (u32, u64) {
-    let screencast = Proxy::new(
+fn start_cast_session(conn: &zbus::Connection, session_path: &str, tag: &str) -> (u32, u64) {
+    let screencast = bus::proxy(
         conn,
         PORTAL,
         DESKTOP_PATH,
         "org.freedesktop.impl.portal.ScreenCast",
-    )
-    .expect("ScreenCast proxy");
-    let (code, _): (u32, HashMap<String, OwnedValue>) = screencast
-        .call(
-            "CreateSession",
-            &(
-                handle(&format!(
-                    "/org/freedesktop/portal/desktop/request/1/{tag}_create"
-                )),
-                handle(session_path),
-                "",
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("CreateSession");
+    );
+    let (code, _): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screencast,
+        "CreateSession",
+        &(
+            handle(&format!(
+                "/org/freedesktop/portal/desktop/request/1/{tag}_create"
+            )),
+            handle(session_path),
+            "",
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
     assert_eq!(code, 0);
-    let (code, _): (u32, HashMap<String, OwnedValue>) = screencast
-        .call(
-            "SelectSources",
-            &(
-                handle(&format!(
-                    "/org/freedesktop/portal/desktop/request/1/{tag}_select"
-                )),
-                handle(session_path),
-                "",
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("SelectSources");
+    let (code, _): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screencast,
+        "SelectSources",
+        &(
+            handle(&format!(
+                "/org/freedesktop/portal/desktop/request/1/{tag}_select"
+            )),
+            handle(session_path),
+            "",
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
     assert_eq!(code, 0);
-    let (code, results): (u32, HashMap<String, OwnedValue>) = screencast
-        .call(
-            "Start",
-            &(
-                handle(&format!(
-                    "/org/freedesktop/portal/desktop/request/1/{tag}_start"
-                )),
-                handle(session_path),
-                "",
-                "",
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("Start");
+    let (code, results): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screencast,
+        "Start",
+        &(
+            handle(&format!(
+                "/org/freedesktop/portal/desktop/request/1/{tag}_start"
+            )),
+            handle(session_path),
+            "",
+            "",
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
     assert_eq!(code, 0, "dmabuf-announced Start: {results:?}");
     stream_details(&results)
 }
@@ -1350,7 +1332,7 @@ impl Script {
 /// bus, isolated PipeWire stack, fake compositor, scripted one-shot
 /// prompter, and daemon. Guards drop in declaration order.
 struct CastEnv {
-    conn: zbus::blocking::Connection,
+    conn: zbus::Connection,
     fake: Arc<FakeCompositor>,
     server: Server,
     runtime_dir: std::path::PathBuf,
@@ -1474,109 +1456,104 @@ fn two_outputs() -> Vec<atrium_portal_ipc::OutputInfo> {
     ]
 }
 
-fn create_session(conn: &zbus::blocking::Connection, tag: &str) -> String {
-    let screencast = Proxy::new(
+fn create_session(conn: &zbus::Connection, tag: &str) -> String {
+    let screencast = bus::proxy(
         conn,
         PORTAL,
         DESKTOP_PATH,
         "org.freedesktop.impl.portal.ScreenCast",
-    )
-    .expect("ScreenCast proxy");
+    );
     let session_path = format!("/org/freedesktop/portal/desktop/session/1/{tag}");
-    let (code, _): (u32, HashMap<String, OwnedValue>) = screencast
-        .call(
-            "CreateSession",
-            &(
-                handle(&format!(
-                    "/org/freedesktop/portal/desktop/request/1/{tag}_create"
-                )),
-                handle(&session_path),
-                "",
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("CreateSession");
+    let (code, _): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screencast,
+        "CreateSession",
+        &(
+            handle(&format!(
+                "/org/freedesktop/portal/desktop/request/1/{tag}_create"
+            )),
+            handle(&session_path),
+            "",
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
     assert_eq!(code, 0);
     session_path
 }
 
 fn select_sources(
-    conn: &zbus::blocking::Connection,
+    conn: &zbus::Connection,
     session_path: &str,
     tag: &str,
-    options: HashMap<String, Value<'_>>,
+    options: HashMap<String, Variant<'_>>,
 ) -> u32 {
-    let screencast = Proxy::new(
+    let screencast = bus::proxy(
         conn,
         PORTAL,
         DESKTOP_PATH,
         "org.freedesktop.impl.portal.ScreenCast",
-    )
-    .expect("ScreenCast proxy");
-    let (code, _): (u32, HashMap<String, OwnedValue>) = screencast
-        .call(
-            "SelectSources",
-            &(
-                handle(&format!(
-                    "/org/freedesktop/portal/desktop/request/1/{tag}_select"
-                )),
-                handle(session_path),
-                "",
-                options,
-            ),
-        )
-        .expect("SelectSources");
+    );
+    let (code, _): (u32, HashMap<String, OwnedVariant>) = bus::call(
+        &screencast,
+        "SelectSources",
+        &(
+            handle(&format!(
+                "/org/freedesktop/portal/desktop/request/1/{tag}_select"
+            )),
+            handle(session_path),
+            "",
+            options,
+        ),
+    );
     code
 }
 
 fn start_session(
-    conn: &zbus::blocking::Connection,
+    conn: &zbus::Connection,
     session_path: &str,
     tag: &str,
-) -> (u32, HashMap<String, OwnedValue>) {
-    let screencast = Proxy::new(
+) -> (u32, HashMap<String, OwnedVariant>) {
+    let screencast = bus::proxy(
         conn,
         PORTAL,
         DESKTOP_PATH,
         "org.freedesktop.impl.portal.ScreenCast",
+    );
+    bus::call(
+        &screencast,
+        "Start",
+        &(
+            handle(&format!(
+                "/org/freedesktop/portal/desktop/request/1/{tag}_start"
+            )),
+            handle(session_path),
+            "",
+            "",
+            HashMap::<String, Variant<'_>>::new(),
+        ),
     )
-    .expect("ScreenCast proxy");
-    screencast
-        .call(
-            "Start",
-            &(
-                handle(&format!(
-                    "/org/freedesktop/portal/desktop/request/1/{tag}_start"
-                )),
-                handle(session_path),
-                "",
-                "",
-                HashMap::<String, Value<'_>>::new(),
-            ),
-        )
-        .expect("Start")
 }
 
 /// Read the `source_type` property of the single stream in a Start result.
-fn stream_source_type(results: &HashMap<String, OwnedValue>) -> u32 {
-    let streams = Value::from(results["streams"].clone());
-    let Value::Array(streams) = streams else {
+fn stream_source_type(results: &HashMap<String, OwnedVariant>) -> u32 {
+    let streams = Variant::from(results["streams"].clone());
+    let Variant::Array(streams) = streams else {
         panic!("streams result must be an array");
     };
-    let Value::Structure(stream) = streams.get(0).expect("read stream").expect("one stream") else {
+    let Variant::Structure(stream) = streams.get(0).expect("read stream").expect("one stream")
+    else {
         panic!("stream entry must be a structure");
     };
-    let Value::Dict(properties) = &stream.fields()[1] else {
+    let Variant::Dict(properties) = &stream.fields()[1] else {
         panic!("stream properties must be a dict");
     };
     properties
         .iter()
         .find_map(|(key, value)| {
-            let Value::Str(key) = key else { return None };
+            let Variant::Str(key) = key else { return None };
             if key.as_str() != "source_type" {
                 return None;
             }
-            let Value::Value(value) = value else {
+            let Variant::Variant(value) = value else {
                 return None;
             };
             u32::try_from(value.as_ref()).ok()
@@ -1585,28 +1562,29 @@ fn stream_source_type(results: &HashMap<String, OwnedValue>) -> u32 {
 }
 
 /// Read the `position` property of the single stream in a Start result.
-fn stream_position(results: &HashMap<String, OwnedValue>) -> (i32, i32) {
-    let streams = Value::from(results["streams"].clone());
-    let Value::Array(streams) = streams else {
+fn stream_position(results: &HashMap<String, OwnedVariant>) -> (i32, i32) {
+    let streams = Variant::from(results["streams"].clone());
+    let Variant::Array(streams) = streams else {
         panic!("streams result must be an array");
     };
-    let Value::Structure(stream) = streams.get(0).expect("read stream").expect("one stream") else {
+    let Variant::Structure(stream) = streams.get(0).expect("read stream").expect("one stream")
+    else {
         panic!("stream entry must be a structure");
     };
-    let Value::Dict(properties) = &stream.fields()[1] else {
+    let Variant::Dict(properties) = &stream.fields()[1] else {
         panic!("stream properties must be a dict");
     };
     properties
         .iter()
         .find_map(|(key, value)| {
-            let Value::Str(key) = key else { return None };
+            let Variant::Str(key) = key else { return None };
             if key.as_str() != "position" {
                 return None;
             }
-            let Value::Value(value) = value else {
+            let Variant::Variant(value) = value else {
                 return None;
             };
-            let Value::Structure(position) = value.as_ref() else {
+            let Variant::Structure(position) = value.as_ref() else {
                 return None;
             };
             let x = i32::try_from(&position.fields()[0]).ok()?;
@@ -1640,8 +1618,8 @@ fn screencast_selects_a_single_output_and_embeds_cursor() {
         &session_path,
         "persel",
         HashMap::from([
-            ("types".to_string(), Value::from(1_u32)),
-            ("cursor_mode".to_string(), Value::from(2_u32)),
+            ("types".to_string(), Variant::from(1_u32)),
+            ("cursor_mode".to_string(), Variant::from(2_u32)),
         ]),
     );
     assert_eq!(code, 0);
@@ -1691,7 +1669,7 @@ fn screencast_window_selection_streams_the_window() {
         &env.conn,
         &session_path,
         "winsel",
-        HashMap::from([("types".to_string(), Value::from(0b11_u32))]),
+        HashMap::from([("types".to_string(), Variant::from(0b11_u32))]),
     );
     assert_eq!(code, 0);
     assert_eq!(
@@ -1734,7 +1712,7 @@ fn screencast_headless_window_selection_without_prompter() {
         &env.conn,
         &session_path,
         "hlwin",
-        HashMap::from([("types".to_string(), Value::from(0b11_u32))]),
+        HashMap::from([("types".to_string(), Variant::from(0b11_u32))]),
     );
     assert_eq!(code, 0);
     assert_eq!(
@@ -1777,7 +1755,7 @@ fn screencast_headless_desktop_click_in_window_mode() {
         &env.conn,
         &session_path,
         "hldesk",
-        HashMap::from([("types".to_string(), Value::from(0b11_u32))]),
+        HashMap::from([("types".to_string(), Variant::from(0b11_u32))]),
     );
     assert_eq!(code, 0);
     assert_eq!(
@@ -1821,8 +1799,8 @@ fn screencast_persist_restore_round_trip() {
         &session_path,
         "persist1",
         HashMap::from([
-            ("types".to_string(), Value::from(1_u32)),
-            ("persist_mode".to_string(), Value::from(1_u32)),
+            ("types".to_string(), Variant::from(1_u32)),
+            ("persist_mode".to_string(), Variant::from(1_u32)),
         ]),
     );
     assert_eq!(code, 0);
@@ -1846,9 +1824,9 @@ fn screencast_persist_restore_round_trip() {
         &restored_path,
         "persist2",
         HashMap::from([
-            ("types".to_string(), Value::from(1_u32)),
-            ("persist_mode".to_string(), Value::from(1_u32)),
-            ("restore_token".to_string(), Value::from(token.clone())),
+            ("types".to_string(), Variant::from(1_u32)),
+            ("persist_mode".to_string(), Variant::from(1_u32)),
+            ("restore_token".to_string(), Variant::from(token.clone())),
         ]),
     );
     assert_eq!(code, 0);
