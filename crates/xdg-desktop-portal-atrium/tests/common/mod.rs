@@ -34,6 +34,40 @@ fn unavailable(message: &str) -> Option<PrivateBus> {
     None
 }
 
+/// Arm a `PR_SET_PDEATHSIG` on the child, so the kernel kills it when this
+/// process dies, however it dies.
+///
+/// Normal teardown runs [`PrivateBus`]'s `Drop`. That is not enough: a test
+/// killed for exceeding its timeout, or a test binary that aborts, leaves the
+/// `dbus-daemon` behind, and a full run then accumulates one orphan per
+/// failure. `PR_SET_PDEATHSIG` is the only teardown that survives `SIGKILL`,
+/// because the kernel — not the dead parent — delivers it.
+///
+/// The signal is set *in the child*, between `fork` and `exec`, which is what
+/// `CommandExt::pre_exec` exists for; calling `prctl` in the parent would
+/// instead arm the parent itself.
+pub fn die_with_parent(command: &mut Command) {
+    use std::os::unix::process::CommandExt as _;
+    // SAFETY: the closure runs in the forked child before `exec`. It calls
+    // only async-signal-safe functions (`prctl`, `getppid`, `_exit`) and
+    // touches no memory shared with the parent beyond the return value, which
+    // is the documented contract for `pre_exec`.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // If the parent died between `fork` and the `prctl` above, the
+            // death signal has already fired for nobody and will never
+            // arrive again: exit instead of lingering as an orphan.
+            if libc::getppid() == 1 {
+                libc::_exit(1);
+            }
+            Ok(())
+        });
+    }
+}
+
 /// A private session bus; killed on drop.
 pub struct PrivateBus {
     address: String,
@@ -66,13 +100,14 @@ impl Drop for PrivateBus {
 /// Spawn a private `dbus-daemon --session`; `None` when dbus-daemon is not
 /// installed (tests skip).
 pub fn private_bus() -> Option<PrivateBus> {
-    let mut child = match Command::new("dbus-daemon")
+    let mut command = Command::new("dbus-daemon");
+    command
         .args(["--session", "--nofork", "--print-address=1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+        .stderr(Stdio::null());
+    die_with_parent(&mut command);
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return unavailable(&format!("could not spawn dbus-daemon: {error}")),
     };
@@ -113,6 +148,7 @@ pub fn daemon_command(bus: &PrivateBus, data: &PathBuf, runtime: &PathBuf) -> Co
         None => Stdio::null(),
     };
     let mut command = Command::new(env!("CARGO_BIN_EXE_xdg-desktop-portal-atrium"));
+    die_with_parent(&mut command);
     command
         .env("DBUS_SESSION_BUS_ADDRESS", bus.address())
         .env("XDG_DATA_HOME", data)
@@ -191,6 +227,121 @@ fi
     permissions.set_mode(0o700);
     std::fs::set_permissions(&path, permissions).expect("make fake prompter executable");
     path
+}
+
+/// Locate the real `xdg-desktop-portal` frontend binary.
+pub fn frontend_binary() -> Option<&'static std::path::Path> {
+    [
+        "/usr/libexec/xdg-desktop-portal",
+        "/usr/lib/xdg-desktop-portal",
+    ]
+    .into_iter()
+    .map(std::path::Path::new)
+    .find(|path| path.is_file())
+}
+
+/// Locate `xdg-document-portal`, which the frontend insists on activating
+/// before it claims `org.freedesktop.portal.Desktop`.
+fn document_portal_binary() -> Option<&'static std::path::Path> {
+    [
+        "/usr/libexec/xdg-document-portal",
+        "/usr/lib/xdg-document-portal",
+    ]
+    .into_iter()
+    .map(std::path::Path::new)
+    .find(|path| path.is_file())
+}
+
+/// Whether the frontend can actually start against `bus`.
+///
+/// The frontend claims `org.freedesktop.portal.Desktop` only after
+/// `StartServiceByName` succeeds for `org.freedesktop.impl.portal.PermissionStore`
+/// and `org.freedesktop.portal.Documents`. A private `dbus-daemon` without a
+/// systemd session manager has no activation helper, so those calls are
+/// accepted and never answered: the frontend sits for its 25 s timeout and
+/// then aborts with "No document portal".
+///
+/// The decisive question is therefore not "is systemd installed" but "did the
+/// bus answer an activation request". This probes the bus directly, in
+/// milliseconds, so callers can skip with a truthful reason.
+pub fn frontend_prerequisites(bus: &PrivateBus) -> Result<(), &'static str> {
+    if frontend_binary().is_none() {
+        return Err("xdg-desktop-portal frontend is not installed");
+    }
+    if document_portal_binary().is_none() {
+        return Err("xdg-document-portal is not installed");
+    }
+    let conn = bus.connect();
+    let fdo = zbus::blocking::Proxy::new(
+        &conn,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+    )
+    .expect("fdo proxy");
+    // A service that never answers distinguishes an inert bus from a live one.
+    // An activation request for a name nobody serves returns promptly on a bus
+    // with an activation helper, and hangs without one, so bound it.
+    let activated: Result<(u32,), _> = {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match fdo.call(
+                "StartServiceByName",
+                &("org.freedesktop.portal.ProbeNobodyServes", 0u32),
+            ) {
+                Ok(reply) => break Ok(reply),
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(error) => break Err(error),
+            }
+        }
+    };
+    match activated {
+        // `2` means "already running", which is impossible here; anything the
+        // bus answers at all proves an activation helper exists.
+        Ok((_,)) => Ok(()),
+        Err(_) => Err("the session bus has no service-activation helper"),
+    }
+}
+
+/// Wait up to `bound` for `name`; returns whether it appeared.
+fn name_appears(conn: &zbus::blocking::Connection, name: &str, bound: Duration) -> bool {
+    let fdo = zbus::blocking::Proxy::new(
+        conn,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+    )
+    .expect("fdo proxy");
+    let deadline = Instant::now() + bound;
+    loop {
+        if fdo
+            .call::<_, _, bool>("NameHasOwner", &(name,))
+            .expect("NameHasOwner call")
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Wait for the frontend to claim its well-known name.
+///
+/// Returns `false` rather than panicking when it never appears: the frontend
+/// can legitimately be unable to start (see [`frontend_prerequisites`]), and a
+/// caller should report "skipped" instead of an opaque timeout. The bound is
+/// short on purpose — the prerequisite check above is what decides whether the
+/// frontend *can* start, and this only covers the residual race.
+pub fn wait_for_frontend(conn: &zbus::blocking::Connection) -> bool {
+    name_appears(
+        conn,
+        "org.freedesktop.portal.Desktop",
+        Duration::from_secs(10),
+    )
 }
 
 /// Wait until the daemon owns `name` (10 s bound).

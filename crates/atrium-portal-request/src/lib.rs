@@ -235,14 +235,40 @@ mod tests {
         }
     }
 
+    /// Ask the kernel to kill the daemon when this test process dies, however
+    /// it dies.
+    ///
+    /// `Drop` covers the ordinary path, but a test killed for exceeding its
+    /// timeout never runs it, and a leaked daemon then accumulates across runs
+    /// until the machine's process table is full. `PR_SET_PDEATHSIG` is the
+    /// only teardown that survives `SIGKILL`; it must be armed *in the child*,
+    /// between `fork` and `exec`.
+    fn die_with_parent(command: &mut Command) {
+        use std::os::unix::process::CommandExt as _;
+        // SAFETY: the closure runs in the forked child before `exec` and calls
+        // only async-signal-safe functions, as `pre_exec` requires.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::prctl(libc::PR_SET_PDEATHSIG) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() == 1 {
+                    libc::_exit(1);
+                }
+                Ok(())
+            });
+        }
+    }
+
     fn private_bus() -> Option<PrivateBus> {
-        let mut child = Command::new("dbus-daemon")
+        let mut command = Command::new("dbus-daemon");
+        command
             .args(["--session", "--nofork", "--print-address=1"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
+            .stderr(Stdio::null());
+        die_with_parent(&mut command);
+        let mut child = command.spawn().ok()?;
         let stdout = child.stdout.take()?;
         let mut line = String::new();
         BufReader::new(stdout).read_line(&mut line).ok()?;

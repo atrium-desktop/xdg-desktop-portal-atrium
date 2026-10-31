@@ -18,7 +18,10 @@ use zbus::blocking::Proxy;
 use zbus::zvariant::{Fd, ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
 mod common;
-use common::{KillOnDrop, e2e_required, private_bus, temp_dir, wait_for_name};
+use common::{
+    KillOnDrop, die_with_parent, e2e_required, frontend_binary, frontend_prerequisites,
+    private_bus, temp_dir, wait_for_frontend, wait_for_name,
+};
 
 const PORTAL: &str = "org.freedesktop.impl.portal.desktop.atrium";
 const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -142,25 +145,21 @@ fn compose_email_hands_off_to_the_mailer() {
 
 #[test]
 fn public_frontend_translates_attachment_fds_for_the_backend() {
-    let frontend = [
-        "/usr/libexec/xdg-desktop-portal",
-        "/usr/lib/xdg-desktop-portal",
-    ]
-    .into_iter()
-    .map(std::path::Path::new)
-    .find(|path| path.is_file());
-    let Some(frontend) = frontend else {
-        assert!(
-            !e2e_required(),
-            "required xdg-desktop-portal frontend is unavailable"
-        );
-        eprintln!("public frontend test: xdg-desktop-portal is unavailable, skipping");
-        return;
-    };
     let Some(bus) = private_bus() else {
         eprintln!("public frontend test: no dbus-daemon, skipping");
         return;
     };
+    // The frontend cannot start without a service-activation helper; report
+    // that as a skip instead of spending its 25 s timeout on a failure it
+    // could never pass.
+    if let Err(reason) = frontend_prerequisites(&bus) {
+        if e2e_required() {
+            panic!("required public-frontend prerequisite failed: {reason}");
+        }
+        eprintln!("public frontend test: {reason}, skipping");
+        return;
+    }
+    let frontend = frontend_binary().expect("checked by frontend_prerequisites");
     let conn = bus.connect();
 
     let root = temp_dir("email-frontend");
@@ -248,12 +247,19 @@ fn public_frontend_translates_attachment_fds_for_the_backend() {
         .stderr(std::process::Stdio::from(
             std::fs::File::create(&frontend_log).expect("frontend log"),
         ));
+    die_with_parent(&mut frontend_command);
     let _frontend = KillOnDrop(
         frontend_command
             .spawn()
             .expect("spawn xdg-desktop-portal frontend"),
     );
-    wait_for_name(&conn, "org.freedesktop.portal.Desktop");
+    if !wait_for_frontend(&conn) {
+        if e2e_required() {
+            panic!("the xdg-desktop-portal frontend never claimed its bus name");
+        }
+        eprintln!("public frontend test: frontend never claimed its name, skipping");
+        return;
+    }
 
     let email = Proxy::new(
         &conn,

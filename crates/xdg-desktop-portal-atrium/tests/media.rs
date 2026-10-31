@@ -359,6 +359,39 @@ fn require_or_skip(condition: bool, message: &str) -> bool {
     false
 }
 
+/// Whether this machine can host an isolated PipeWire stack right now.
+///
+/// A `wireplumber` stuck in uninterruptible sleep (`D`) on the ALSA probe
+/// (`snd_pcm_substream_proc_status_read`) cannot be killed and holds the audio
+/// device; every later PipeWire test then blocks until its timeout. That is a
+/// machine condition, not a code defect, so report it as a skip with the
+/// reason instead of spending the per-test timeout.
+fn audio_stack_is_wedged() -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|n| n.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
+            continue;
+        };
+        let is_stuck = status.lines().any(|line| line == "State:\tD (disk sleep)");
+        if !is_stuck {
+            continue;
+        }
+        let Ok(wchan) = std::fs::read_to_string(format!("/proc/{pid}/wchan")) else {
+            continue;
+        };
+        if wchan.contains("snd_pcm") || wchan.contains("snd_") {
+            return true;
+        }
+    }
+    false
+}
+
 /// Spawn the isolated PipeWire daemon and WirePlumber session manager that
 /// screencast E2E tests share. Returns `None` after printing a skip reason
 /// when the environment cannot host the stack (unless E2E is required).
@@ -375,6 +408,10 @@ fn spawn_pipewire_stack(
     ) || !require_or_skip(
         media_tool_available("wireplumber"),
         "WirePlumber session manager unavailable",
+    ) || !require_or_skip(
+        !audio_stack_is_wedged(),
+        "a WirePlumber process is stuck in uninterruptible audio I/O; \
+         the machine cannot host an isolated PipeWire stack until it reboots",
     ) {
         return None;
     }
@@ -389,6 +426,11 @@ fn spawn_pipewire_stack(
         .stderr(Stdio::from(
             std::fs::File::create(&pipewire_log).expect("PipeWire log"),
         ));
+    // The stack is killed by `Drop`, but a test killed for exceeding its
+    // timeout never runs `Drop`; the kernel's parent-death signal is the only
+    // teardown that survives that. A leaked WirePlumber blocks forever in the
+    // ALSA probe and degrades every later PipeWire test on the machine.
+    common::die_with_parent(&mut pipewire);
     let mut pipewire = pipewire.spawn().expect("pipewire was probed above");
     let socket = runtime_dir.join("pipewire-0");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -431,6 +473,7 @@ fn spawn_pipewire_stack(
         .stderr(Stdio::from(
             std::fs::File::create(&wireplumber_log).expect("WirePlumber log"),
         ));
+    common::die_with_parent(&mut wireplumber);
     let mut wireplumber = wireplumber.spawn().expect("WirePlumber was probed above");
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -491,6 +534,7 @@ fn spawn_gst_consumer(
         .stderr(Stdio::from(
             std::fs::File::create(&consumer_log).expect("consumer log"),
         ));
+    common::die_with_parent(&mut consumer);
     (
         consumer.spawn().expect("GStreamer was probed above"),
         consumer_log,

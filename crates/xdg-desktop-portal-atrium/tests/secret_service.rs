@@ -13,8 +13,9 @@ use zbus::zvariant::{Fd, ObjectPath, OwnedObjectPath, Value};
 
 mod common;
 use common::{
-    FakeSigil, FakeSigilResponse, KillOnDrop, e2e_required, pipe_pair, private_bus,
-    read_all_with_timeout, spawn_daemon, temp_dir, wait_for_name,
+    FakeSigil, FakeSigilResponse, KillOnDrop, die_with_parent, e2e_required, frontend_binary,
+    frontend_prerequisites, pipe_pair, private_bus, read_all_with_timeout, spawn_daemon, temp_dir,
+    wait_for_frontend, wait_for_name,
 };
 
 const PORTAL: &str = "org.freedesktop.impl.portal.desktop.atrium";
@@ -195,25 +196,18 @@ fn interface_section<'a>(xml: &'a str, short_name: &str) -> &'a str {
 
 #[test]
 fn public_frontend_delivers_the_native_secret() {
-    let frontend = [
-        "/usr/libexec/xdg-desktop-portal",
-        "/usr/lib/xdg-desktop-portal",
-    ]
-    .into_iter()
-    .map(Path::new)
-    .find(|path| path.is_file());
-    let Some(frontend) = frontend else {
-        assert!(
-            !e2e_required(),
-            "required xdg-desktop-portal frontend is unavailable"
-        );
-        eprintln!("public Secret test: xdg-desktop-portal unavailable, skipping");
-        return;
-    };
     let Some(bus) = private_bus() else {
         eprintln!("public Secret test: dbus-daemon unavailable, skipping");
         return;
     };
+    if let Err(reason) = frontend_prerequisites(&bus) {
+        if e2e_required() {
+            panic!("required public-Secret prerequisite failed: {reason}");
+        }
+        eprintln!("public Secret test: {reason}, skipping");
+        return;
+    }
+    let frontend = frontend_binary().expect("checked by frontend_prerequisites");
     let conn = bus.connect();
 
     let root = temp_dir("secret-frontend");
@@ -287,12 +281,19 @@ fn public_frontend_delivers_the_native_secret() {
         .stderr(Stdio::from(
             std::fs::File::create(&frontend_log).expect("frontend log"),
         ));
+    die_with_parent(&mut frontend_command);
     let _frontend = KillOnDrop(
         frontend_command
             .spawn()
             .expect("spawn xdg-desktop-portal frontend"),
     );
-    wait_for_name(&conn, "org.freedesktop.portal.Desktop");
+    if !wait_for_frontend(&conn) {
+        if e2e_required() {
+            panic!("the xdg-desktop-portal frontend never claimed its bus name");
+        }
+        eprintln!("public frontend test: frontend never claimed its name, skipping");
+        return;
+    }
 
     let secret = Proxy::new(
         &conn,

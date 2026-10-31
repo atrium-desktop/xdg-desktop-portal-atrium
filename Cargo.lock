@@ -245,6 +245,7 @@ name = "atrium-portal-request"
 version = "0.0.34"
 dependencies = [
  "async-channel",
+ "libc",
  "log",
  "zbus",
 ]

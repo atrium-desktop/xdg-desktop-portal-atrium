@@ -47,6 +47,21 @@ All notable changes to this project are documented in this file.
 
 - **Consent, application choice, source choice, and notifications work again.**
   All of them previously failed with "atrium-portal-prompter was not found".
+- **The test suite no longer leaks processes.** Both `PrivateBus` helpers
+  armed only a `Drop`-based kill, so a test killed for exceeding its timeout
+  left its `dbus-daemon` running; a full run accumulated four orphans per
+  invocation, and a long-lived leak eventually left `wireplumber` stuck in
+  uninterruptible ALSA I/O, which degraded every later PipeWire test into a
+  timeout. The bus is now armed with `PR_SET_PDEATHSIG` in the child, the
+  isolated PipeWire/WirePlumber/GStreamer stack is armed the same way, and a
+  machine whose audio stack is already wedged reports a skip with the reason
+  instead of waiting out the timeout.
+- **The public-frontend tests skip truthfully.** They waited 10 s for
+  `org.freedesktop.portal.Desktop` and failed when it never appeared; the real
+  cause is that a private `dbus-daemon` has no service-activation helper, so
+  the frontend blocks on `StartServiceByName` for `PermissionStore` and
+  `Documents` and then aborts with "No document portal". A millisecond-scale
+  probe of the bus now decides this up front.
 - **`OpenURI` now answers to its specification name.** zbus derived the D-Bus
   member from the Rust identifier and exported `OpenUri`, while the interface
   defines `OpenURI`; the frontend's call therefore resolved to
