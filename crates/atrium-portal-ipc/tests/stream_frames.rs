@@ -234,7 +234,7 @@ fn slot_streams_transfer_the_table_frames_and_releases() {
 
 #[test]
 fn handshake_negotiates_down_to_a_legacy_server() {
-    let server = Server::start_legacy(
+    let server = Server::start_capped(
         &socket_path("legacy"),
         Arc::new(SlotStream {
             releases: std::sync::Mutex::new(Vec::new()),
@@ -541,7 +541,7 @@ fn v29_start_parameters_degrade_against_a_legacy_server() {
     let handler = Arc::new(Outputs {
         starts: std::sync::Mutex::new(Vec::new()),
     });
-    let server = Server::start_legacy(
+    let server = Server::start_capped(
         &socket_path("v29-legacy"),
         Arc::clone(&handler),
         atrium_portal_ipc::MIN_PROTOCOL_VERSION,

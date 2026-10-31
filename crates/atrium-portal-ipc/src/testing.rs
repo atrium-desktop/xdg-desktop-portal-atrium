@@ -10,13 +10,14 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use crate::Command;
 use crate::blob::SealedBlob;
 use crate::codec::{read_msg, write_msg};
 use crate::schema::{Request, Response, valid_wallpaper_path};
 use crate::{
-    ConfirmPickResult, ConnectionCapabilities, Event, LOCAL_PORTAL_SCOPE, LeaseGrant, OutputInfo,
-    OutputMode, PROTOCOL_VERSION, PickKind, PickResult, Point, Rect, Scale, SettingsSnapshot,
-    StreamCursorMode, StreamPixelFormat, StreamTarget, VirtualOutputSpec,
+    AppPickResult, ConfirmPickResult, ConnectionCapabilities, Event, LOCAL_PORTAL_SCOPE,
+    LeaseGrant, OutputInfo, OutputMode, PROTOCOL_VERSION, PickKind, PickResult, Point, Rect, Scale,
+    SettingsSnapshot, StreamCursorMode, StreamPixelFormat, StreamTarget, VirtualOutputSpec,
 };
 
 pub struct CaptureOutputPayload {
@@ -99,6 +100,23 @@ pub trait Handler: Send + Sync + 'static {
         _accept_label: Option<String>,
     ) -> Result<ConfirmPickResult, String> {
         Err("confirmation is not implemented by this test server".into())
+    }
+
+    /// A fire-and-forget compositor command (the Notification portal's
+    /// `Notify` / `DismissNotification`).
+    fn command(&self, _connection: u64, _cmd: Command) -> Result<(), String> {
+        Err("commands are not implemented by this test server".into())
+    }
+
+    /// Protocol-14 application picking (the AppChooser portal's side).
+    fn pick_app(
+        &self,
+        _connection: u64,
+        _choices: Vec<String>,
+        _subject: Option<String>,
+        _last_choice: Option<String>,
+    ) -> Result<AppPickResult, String> {
+        Err("application picking is not implemented by this test server".into())
     }
 
     fn stream_output_start(
@@ -222,16 +240,22 @@ impl Server {
         Self::start_inner(path, handler, None)
     }
 
-    /// Start a server that only accepts exactly `version`, like a
-    /// compositor from before protocol down-negotiation.
-    pub fn start_legacy<H>(path: &Path, handler: Arc<H>, version: u32) -> io::Result<Self>
+    /// Start a server that speaks at most `version` and negotiates newer
+    /// clients down to it, like an older compositor that still supports
+    /// down-negotiation. Operations introduced after `version` are refused the
+    /// way such a peer refuses them: as an unknown request variant.
+    pub fn start_capped<H>(path: &Path, handler: Arc<H>, version: u32) -> io::Result<Self>
     where
         H: Handler,
     {
         Self::start_inner(path, handler, Some(version))
     }
 
-    fn start_inner<H>(path: &Path, handler: Arc<H>, exact_version: Option<u32>) -> io::Result<Self>
+    fn start_inner<H>(
+        path: &Path,
+        handler: Arc<H>,
+        version_ceiling: Option<u32>,
+    ) -> io::Result<Self>
     where
         H: Handler,
     {
@@ -271,7 +295,7 @@ impl Server {
                                         connection,
                                         connection_handler,
                                         connection_streams,
-                                        exact_version,
+                                        version_ceiling,
                                     );
                                 });
                         }
@@ -446,7 +470,7 @@ fn serve_connection(
     connection: u64,
     handler: Arc<dyn Handler>,
     streams: Streams,
-    exact_version: Option<u32>,
+    version_ceiling: Option<u32>,
 ) {
     let Ok(mut reader) = stream.try_clone() else {
         return;
@@ -460,6 +484,8 @@ fn serve_connection(
     // carry no ops.
     let mut granted = ConnectionCapabilities::QUERY;
     let mut lease_alive = false;
+    // The version this connection settled on; op gates below consult it.
+    let mut negotiated = PROTOCOL_VERSION;
     let mut scope: Option<String> = None;
     while let Ok(request) = read_msg::<_, Request>(&mut reader) {
         let result = match request {
@@ -469,18 +495,18 @@ fn serve_connection(
                 scope: requested_scope,
                 lease,
             } if !handshaken => {
-                let accepted = match exact_version {
-                    Some(exact) => version == exact,
-                    None => version <= PROTOCOL_VERSION,
-                };
-                if !accepted {
-                    send_error(&writer, format!("unsupported protocol version {version}"))
-                } else if requested_scope.as_deref().is_some_and(|name| {
+                // A real compositor accepts any client version and answers
+                // with its own, so the client negotiates down. A capped server
+                // models an older compositor; the cap only limits what it
+                // speaks, never whether it accepts the handshake.
+                let ceiling = version_ceiling.unwrap_or(PROTOCOL_VERSION);
+                if requested_scope.as_deref().is_some_and(|name| {
                     name != LOCAL_PORTAL_SCOPE && !handler.known_scopes().contains(&name)
                 }) {
                     send_error(&writer, "unknown test scope".into())
                 } else {
                     handshaken = true;
+                    negotiated = version.min(ceiling);
                     granted = ConnectionCapabilities {
                         query: true,
                         ..caps
@@ -499,7 +525,7 @@ fn serve_connection(
                     send(
                         &writer,
                         &Response::Hello {
-                            version: version.min(PROTOCOL_VERSION),
+                            version: version.min(ceiling),
                             caps: granted,
                             lease: grant,
                         },
@@ -559,12 +585,26 @@ fn serve_connection(
                 Ok(result) => send(&writer, &Response::Picked { result }),
                 Err(message) => send_error(&writer, message),
             },
+            Request::PickConfirm { .. } if negotiated < 16 => {
+                send_error(&writer, "unknown request variant".into())
+            }
             Request::PickConfirm {
                 title,
                 body,
                 accept_label,
             } => match handler.pick_confirm(connection, title, body, accept_label) {
                 Ok(result) => send(&writer, &Response::ConfirmPicked { result }),
+                Err(message) => send_error(&writer, message),
+            },
+            Request::PickApp { .. } if negotiated < 14 => {
+                send_error(&writer, "unknown request variant".into())
+            }
+            Request::PickApp {
+                choices,
+                subject,
+                last_choice,
+            } => match handler.pick_app(connection, choices, subject, last_choice) {
+                Ok(result) => send(&writer, &Response::AppPicked { result }),
                 Err(message) => send_error(&writer, message),
             },
             Request::StreamOutputStart {
@@ -788,6 +828,24 @@ fn serve_connection(
                         Ok(connector) => {
                             send(&writer, &Response::VirtualOutputDestroyed { connector })
                         }
+                        Err(message) => send_error(&writer, message),
+                    }
+                }
+            }
+            Request::Do { cmd } => {
+                // Fire-and-forget commands: control, a live lease, and the
+                // matching explicit scope operation. The reply is a receipt.
+                let op_allowed =
+                    scope.as_deref() == Some(LOCAL_PORTAL_SCOPE) && handler.session_active();
+                if !granted.control {
+                    send_error(&writer, "command requires the control capability".into())
+                } else if !lease_alive {
+                    send_error(&writer, "privileged capability lease expired".into())
+                } else if !op_allowed {
+                    send_error(&writer, "out of scope".into())
+                } else {
+                    match handler.command(connection, cmd) {
+                        Ok(()) => send(&writer, &Response::Ok),
                         Err(message) => send_error(&writer, message),
                     }
                 }

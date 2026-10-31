@@ -25,11 +25,11 @@ Set `DESTDIR` for a staged distribution package (build once, then install
 from the existing `target/release` artifacts):
 
 ```bash
-cargo build --locked --release -p xdg-desktop-portal-atrium -p atrium-portal-prompter
+cargo build --locked --release -p xdg-desktop-portal-atrium
 DESTDIR="$PWD/stage" ./scripts/install.sh --prefix /usr --no-build
 ```
 
-The install script places both private executables under the configured
+The install script places the private daemon under the configured
 `libexecdir`, generates the matching D-Bus service, and installs
 `atrium.portal` plus `tessera-portals.conf` (with `atrium-portals.conf` compatibility)
 under the configured data directory.

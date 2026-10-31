@@ -1,0 +1,15 @@
+[package]
+name = "atrium-portal-request"
+description = "The org.freedesktop.impl.portal.Request lifecycle for the atrium portal"
+readme = "README.md"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-channel = { workspace = true }
+log.workspace = true
+zbus.workspace = true

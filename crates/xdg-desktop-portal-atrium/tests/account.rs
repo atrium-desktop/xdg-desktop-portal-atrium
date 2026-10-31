@@ -1,28 +1,29 @@
 //! End-to-end Account backend exercise. The real daemon runs on a private
-//! session bus and delegates consent to a pipe-compatible Portal prompter;
-//! no compositor socket participates.
+//! session bus and delegates consent to compositor chrome (ADR-0026), driven
+//! here by a fake compositor speaking the real scoped IPC protocol.
 
 use std::collections::HashMap;
 
-use atrium_portal_prompter::{ConfirmRequest, ConfirmResponse, PromptRequest, PrompterResponse};
+use atrium_portal_ipc::ConfirmPickResult;
 use zbus::blocking::Proxy;
 use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 
 mod common;
-use common::{
-    KillOnDrop, daemon_command, fake_prompter, private_bus, read_prompter_request, temp_dir,
-    wait_for_name, write_prompter_response,
-};
+use common::fake_compositor::FakeCompositor;
+use common::{KillOnDrop, daemon_command, private_bus, temp_dir, wait_for_name};
 
 const PORTAL: &str = "org.freedesktop.impl.portal.desktop.atrium";
 const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
 const IFACE: &str = "org.freedesktop.impl.portal.Account";
 
-/// Run one GetUserInformation against a scripted Portal prompt.
+/// One observed consent question.
+type Consent = (String, String);
+
+/// Run one GetUserInformation against a compositor that answers `answer`.
 fn get_user_information(
-    answer: ConfirmResponse,
+    answer: ConfirmPickResult,
     with_avatar: bool,
-) -> Option<(u32, HashMap<String, OwnedValue>, ConfirmRequest)> {
+) -> Option<(u32, HashMap<String, OwnedValue>, Consent)> {
     let Some(bus) = private_bus() else {
         eprintln!("account: no dbus-daemon, skipping");
         return None;
@@ -31,20 +32,20 @@ fn get_user_information(
 
     let data_dir = temp_dir("account-data");
     let runtime_dir = temp_dir("account-runtime");
-    let fixture_dir = temp_dir("account-prompter");
     if with_avatar {
         let avatars = data_dir.join("tessera/avatars");
         std::fs::create_dir_all(&avatars).expect("avatar dir");
         std::fs::write(avatars.join("face.png"), b"png").expect("avatar fixture");
     }
-    let prompter = fake_prompter(&fixture_dir);
-    write_prompter_response(&fixture_dir, 1, &PrompterResponse::confirm(answer));
+    let (server, fake) = FakeCompositor::start(&runtime_dir.join("tessera.sock"))
+        .expect("bind the fake compositor IPC");
+    fake.consent_answers.lock().unwrap().push(answer);
 
-    let mut command = daemon_command(&bus, &data_dir, &runtime_dir);
-    command
-        .env("ATRIUM_PORTAL_PROMPTER", &prompter)
-        .env("ATRIUM_PROMPTER_FIXTURE", &fixture_dir);
-    let _daemon = KillOnDrop(command.spawn().expect("spawn portal daemon"));
+    let _daemon = KillOnDrop(
+        daemon_command(&bus, &data_dir, &runtime_dir)
+            .spawn()
+            .expect("spawn portal daemon"),
+    );
     wait_for_name(&conn, PORTAL);
 
     let account = Proxy::new(&conn, PORTAL, DESKTOP_PATH, IFACE).expect("account proxy");
@@ -66,20 +67,26 @@ fn get_user_information(
             ),
         )
         .expect("GetUserInformation");
-    let PromptRequest::Confirm(request) = read_prompter_request(&fixture_dir, 1) else {
-        panic!("Account must issue a confirmation prompt");
-    };
 
-    let result = (response, results, request);
+    let consent = fake
+        .confirms
+        .lock()
+        .unwrap()
+        .first()
+        .cloned()
+        .expect("Account must ask the compositor for consent");
+
+    let result = (response, results, consent);
+    drop(server);
     let _ = std::fs::remove_dir_all(&data_dir);
     let _ = std::fs::remove_dir_all(&runtime_dir);
-    let _ = std::fs::remove_dir_all(&fixture_dir);
     Some(result)
 }
 
 #[test]
 fn consent_shares_the_identity_with_avatar() {
-    let Some((response, results, prompt)) = get_user_information(ConfirmResponse::Confirmed, true)
+    let Some((response, results, (title, body))) =
+        get_user_information(ConfirmPickResult::Confirmed, true)
     else {
         return;
     };
@@ -92,25 +99,64 @@ fn consent_shares_the_identity_with_avatar() {
         image.starts_with("file://") && image.contains("tessera/avatars/face.png"),
         "the avatar URI must point at the canonical location: {image}"
     );
-    assert_eq!(prompt.title, "Share Personal Information");
-    assert!(prompt.body.contains("dev.tessera.smoke"), "{}", prompt.body);
+    assert_eq!(title, "Share Personal Information");
+    assert!(body.contains("dev.tessera.smoke"), "{body}");
     assert!(
-        prompt.body.contains("recipes"),
-        "the reason reaches the dialog: {}",
-        prompt.body
-    );
-    assert_eq!(
-        prompt.parent_window.as_deref(),
-        Some("wayland:account-parent")
+        body.contains("recipes"),
+        "the reason reaches the dialog: {body}"
     );
 }
 
 #[test]
 fn a_declined_consent_releases_nothing() {
-    let Some((response, results, _)) = get_user_information(ConfirmResponse::Cancelled, false)
+    let Some((response, results, _)) = get_user_information(ConfirmPickResult::Cancelled, false)
     else {
         return;
     };
     assert_eq!(response, 1, "a declined consent must answer 1");
+    assert!(results.is_empty());
+}
+
+#[test]
+fn an_unreachable_compositor_fails_closed() {
+    let Some((response, results, _)) = ({
+        // No fake compositor is bound, so the consent question cannot be asked.
+        let Some(bus) = private_bus() else {
+            eprintln!("account: no dbus-daemon, skipping");
+            return;
+        };
+        let conn = bus.connect();
+        let data_dir = temp_dir("account-noipc-data");
+        let runtime_dir = temp_dir("account-noipc-runtime");
+        let _daemon = KillOnDrop(
+            daemon_command(&bus, &data_dir, &runtime_dir)
+                .spawn()
+                .expect("spawn portal daemon"),
+        );
+        wait_for_name(&conn, PORTAL);
+        let account = Proxy::new(&conn, PORTAL, DESKTOP_PATH, IFACE).expect("account proxy");
+        let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1/acc2")
+            .expect("request handle path");
+        let (response, results): (u32, HashMap<String, OwnedValue>) = account
+            .call(
+                "GetUserInformation",
+                &(
+                    handle,
+                    "dev.tessera.smoke",
+                    "",
+                    HashMap::<String, Value<'_>>::new(),
+                ),
+            )
+            .expect("GetUserInformation");
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&runtime_dir);
+        Some((response, results, (String::new(), String::new())))
+    }) else {
+        return;
+    };
+    assert_eq!(
+        response, 2,
+        "an unaskable consent must report failure, never success"
+    );
     assert!(results.is_empty());
 }

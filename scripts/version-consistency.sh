@@ -6,7 +6,7 @@
 # Sources of truth:
 #   Cargo.toml workspace.package.version
 #   atrium-portal-ipc PROTOCOL_VERSION / MIN_PROTOCOL_VERSION
-#   atrium-portal-prompter PROCESS_CONTRACT_VERSION
+#   atrium-arca-contract ARCA_CONTRACT_VERSION
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -81,16 +81,18 @@ for f in "$repo/README.md" "$repo/docs/reference/compatibility.md"; do
     fi
 done
 
-# ---- prompter contract <-> smoke-test payloads ---------------------------
-contract_lib="$repo/crates/atrium-portal-prompter/src/lib.rs"
-contract=$(sed -n 's/^pub const PROCESS_CONTRACT_VERSION: u32 = \([0-9]*\);$/\1/p' \
+# ---- arca chooser contract <-> smoke-test payloads -----------------------
+# ADR-0027: the only process contract left is the arca FileChooser stdio
+# envelope, and docs/dev/portal-ui-testing.md pipes literal requests into it.
+contract_lib="$repo/crates/atrium-arca-contract/src/lib.rs"
+contract=$(sed -n 's/^pub const ARCA_CONTRACT_VERSION: u32 = \([0-9]*\);$/\1/p' \
     "$contract_lib")
 if [ -z "$contract" ]; then
-    fail "could not read PROCESS_CONTRACT_VERSION from $contract_lib"
+    fail "could not read ARCA_CONTRACT_VERSION from $contract_lib"
 else
     testing="$repo/docs/dev/portal-ui-testing.md"
-    stale=$(grep -c "{\"version\":$contract,\"prompt\":" "$testing" || true)
-    total=$(grep -c '{"version":[0-9]*,"prompt":' "$testing" || true)
+    stale=$(grep -c "{\"version\":$contract,\"request\":" "$testing" || true)
+    total=$(grep -c '{"version":[0-9]*,"request":' "$testing" || true)
     if [ "$stale" != "$total" ] || [ "$total" -eq 0 ]; then
         fail "$testing: $((total - stale)) payload(s) do not use contract version $contract"
     fi

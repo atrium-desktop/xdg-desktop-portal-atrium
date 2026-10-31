@@ -12,7 +12,7 @@ pub mod portal;
 
 use std::sync::{Arc, Mutex};
 
-use atrium_portal_runtime::RequestTracker;
+use atrium_portal_request::RequestTracker;
 
 /// Errors occurring in the portal secret adapter.
 #[derive(Debug, thiserror::Error)]

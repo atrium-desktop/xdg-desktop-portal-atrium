@@ -337,6 +337,18 @@ pub enum ConfirmPickResult {
     Cancelled,
 }
 
+/// The outcome of a `Request::PickApp`, delivered as `Response::AppPicked`.
+/// The compositor renders the chooser chrome; the backend only names the
+/// candidates and reads back the confirmed desktop file id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum AppPickResult {
+    /// The confirmed application's desktop file id.
+    App { id: String },
+    /// The user dismissed the picker without confirming.
+    Cancelled,
+}
+
 /// The compositor's `SetWallpaper` path rule
 /// (`ActorResource::FilesystemPath { access: Read }::validate`), mirrored so
 /// the client refuses a request the compositor would reject anyway: a
@@ -488,6 +500,26 @@ pub(crate) enum Request {
         body: String,
         accept_label: Option<String>,
     },
+    /// Ask the user to choose one application out of `choices` (desktop file
+    /// ids) through compositor chrome (the AppChooser portal's compositor
+    /// side, protocol 14). `subject` is a human-readable context line and
+    /// `last_choice` pre-highlights the previously used application. It is
+    /// fail-closed: `control`, a live lease, and an explicit `PickApp` scope
+    /// operation.
+    PickApp {
+        choices: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_choice: Option<String>,
+    },
+    /// Run one compositor command. The `Command` projection carries the
+    /// fire-and-forget actions the Notification portal needs; unlike the
+    /// top-level ops it is not version-gated, because `Notify` predates this
+    /// projection's floor.
+    Do {
+        cmd: Command,
+    },
     /// Replace the desktop wallpaper with the image at `path` (the
     /// Wallpaper portal). The op predates this projection's version floor
     /// (the compositor has spoken it since protocol 17), so no version gate
@@ -499,6 +531,30 @@ pub(crate) enum Request {
     SetWallpaper {
         path: PathBuf,
     },
+}
+
+/// The compositor commands this projection admits.
+///
+/// Only the Portal-owned, fire-and-forget actions live here. Every command is
+/// authorized by the compositor's scope (`control` plus the matching
+/// operation), and the reply is a bare receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum Command {
+    /// Push one notification into the compositor's queue (the Notification
+    /// portal). `external_id` is the portal's per-application id, stored on
+    /// the entry so the compositor can match a withdrawal back to it.
+    Notify {
+        summary: String,
+        body: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        external_id: Option<String>,
+    },
+    /// Dismiss a queued notification before its retention window expires.
+    /// Addressed by the compositor's own entry id.
+    DismissNotification { id: u64 },
 }
 
 /// Partial response projection. Unknown fields inside known responses are
@@ -564,10 +620,17 @@ pub(crate) enum Response {
     ConfirmPicked {
         result: ConfirmPickResult,
     },
+    /// Reply to [`Request::PickApp`] (protocol 14).
+    AppPicked {
+        result: AppPickResult,
+    },
     /// Reply to [`Request::SetWallpaper`]: the wallpaper was decoded and
     /// swapped (an authoritative main-loop receipt). Refusals arrive as
     /// `Error`.
     WallpaperSet {},
+    /// Reply to [`Request::Do`]: the command was applied (an authoritative
+    /// main-loop receipt). Refusals arrive as `Error`.
+    Ok,
     LeaseRenewed {
         lease: LeaseGrant,
     },
@@ -943,6 +1006,18 @@ mod tests {
                     "title": "Capture",
                     "body": "Allow capture?",
                     "accept_label": null
+                }),
+            ),
+            (
+                Request::PickApp {
+                    choices: vec!["org.example.A.desktop".into()],
+                    subject: Some("a text file".into()),
+                    last_choice: None,
+                },
+                serde_json::json!({
+                    "type": "PickApp",
+                    "choices": ["org.example.A.desktop"],
+                    "subject": "a text file"
                 }),
             ),
             (

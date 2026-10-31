@@ -3,6 +3,10 @@
 //! exactly, so tests can pin the two delivery modes: zero-copy dmabuf
 //! forwarding and the shared-memory fallback. It connects over an explicit
 //! socket fd so no environment variables or global state are involved.
+//!
+//! The `pub` items below are public to the `media` test binary that links
+//! this module, not to a library; `unreachable_pub` cannot see that.
+#![allow(unreachable_pub)]
 
 use std::cell::RefCell;
 use std::os::unix::net::UnixStream;

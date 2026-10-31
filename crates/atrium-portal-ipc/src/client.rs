@@ -11,9 +11,10 @@ use crate::blob;
 use crate::codec::{read_msg, write_msg};
 use crate::schema::{LeaseRequest, Request, Response, valid_wallpaper_path};
 use crate::{
-    ConfirmPickResult, ConnectionCapabilities, Event, LeaseGrant, MIN_PROTOCOL_VERSION, OutputInfo,
-    OutputMode, PROTOCOL_VERSION, PickKind, PickResult, Point, Rect, Scale, SettingsSnapshot,
-    StreamCursorMode, StreamPixelFormat, StreamTarget, VirtualOutputSpec,
+    AppPickResult, ConfirmPickResult, ConnectionCapabilities, Event, LeaseGrant,
+    MIN_PROTOCOL_VERSION, OutputInfo, OutputMode, PROTOCOL_VERSION, PickKind, PickResult, Point,
+    Rect, Scale, SettingsSnapshot, StreamCursorMode, StreamPixelFormat, StreamTarget,
+    VirtualOutputSpec,
 };
 
 #[derive(Debug)]
@@ -301,6 +302,66 @@ impl Client {
             Response::ConfirmPicked { result } => Ok(result),
             Response::Error { message } => Err(io::Error::other(message)),
             other => Err(unexpected("ConfirmPicked", &other)),
+        }
+    }
+
+    /// Push one notification into the compositor's queue (the Notification
+    /// portal). `external_id` is the portal's per-application id, which the
+    /// compositor stores on the entry. Fire-and-forget: the reply is a bare
+    /// receipt, and the compositor's queue id is not reported back.
+    pub fn notify(
+        &mut self,
+        summary: String,
+        body: String,
+        app_id: Option<String>,
+        external_id: Option<String>,
+    ) -> io::Result<()> {
+        self.command(crate::schema::Command::Notify {
+            summary,
+            body,
+            app_id,
+            external_id,
+        })
+    }
+
+    /// Withdraw a queued notification by the compositor's own entry id.
+    pub fn dismiss_notification(&mut self, id: u64) -> io::Result<()> {
+        self.command(crate::schema::Command::DismissNotification { id })
+    }
+
+    /// Run one compositor command and require its receipt.
+    fn command(&mut self, cmd: crate::schema::Command) -> io::Result<()> {
+        write_msg(&mut self.stream, &Request::Do { cmd })?;
+        match read_msg::<_, Response>(&mut self.stream)? {
+            Response::Ok => Ok(()),
+            Response::Error { message } => Err(io::Error::other(message)),
+            other => Err(unexpected("Ok", &other)),
+        }
+    }
+
+    /// Ask the user to choose one application out of `choices` (desktop file
+    /// ids) through compositor chrome (the AppChooser portal's compositor
+    /// side, protocol 14). Same blocking, no-retry discipline as
+    /// [`Client::pick_target`]. Requires `control` and an explicit `PickApp`
+    /// operation in the connection's scope.
+    pub fn pick_app(
+        &mut self,
+        choices: Vec<String>,
+        subject: Option<String>,
+        last_choice: Option<String>,
+    ) -> io::Result<AppPickResult> {
+        write_msg(
+            &mut self.stream,
+            &Request::PickApp {
+                choices,
+                subject,
+                last_choice,
+            },
+        )?;
+        match read_msg::<_, Response>(&mut self.stream)? {
+            Response::AppPicked { result } => Ok(result),
+            Response::Error { message } => Err(io::Error::other(message)),
+            other => Err(unexpected("AppPicked", &other)),
         }
     }
 

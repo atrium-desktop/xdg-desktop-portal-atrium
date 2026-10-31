@@ -62,7 +62,7 @@ fn wallpaper_path_round_trips_at_every_negotiated_version() {
     for (name, legacy) in [("wallpaper-v25", None), ("wallpaper-v24", Some(24))] {
         let handler = Arc::new(Recording::default());
         let server = match legacy {
-            Some(version) => Server::start_legacy(&socket_path(name), handler.clone(), version),
+            Some(version) => Server::start_capped(&socket_path(name), handler.clone(), version),
             None => Server::start(&socket_path(name), handler.clone()),
         }
         .expect("bind test server");

@@ -1,0 +1,27 @@
+[package]
+name = "atrium-portal-cast"
+description = "The PipeWire producer stream for atrium portal ScreenCast sessions"
+readme = "README.md"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+atrium-portal-ipc = { workspace = true }
+# Rust binding over the system libpipewire (rust-version 1.80, within the
+# workspace MSRV); no async runtime. v0_3_34 enables
+# pw_stream_trigger_process so the producer pushes compositor frames as they
+# arrive instead of letting the consumer over-read stale frames.
+pipewire = { version = "0.10", features = ["v0_3_34"] }
+log = { workspace = true }
+libc = { workspace = true }
+
+[lints]
+workspace = true
+
+[lib]
+name = "atrium_portal_cast"
+path = "src/lib.rs"

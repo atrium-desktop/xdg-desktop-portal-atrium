@@ -1,25 +1,27 @@
-//! End-to-end appearance forwarding: the compositor's desktop preferences
-//! (served by the fake compositor over the real IPC socket) must reach the
-//! prompter request as the contract-v6 `appearance` snapshot.
+//! End-to-end settings projection: the compositor's desktop preferences
+//! (served by a fake compositor over the real IPC socket) must be what the
+//! `org.freedesktop.impl.portal.Settings` interface reports.
+//!
+//! The backend no longer forwards an appearance snapshot to a prompt process
+//! (ADR-0026): every prompt is compositor chrome, and the compositor skins its
+//! own surfaces from the same preferences. What the portal still owes the
+//! desktop is the *projection* of those preferences on the Settings interface,
+//! which is what these tests drive.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use atrium_portal_ipc::testing::{Handler, Server};
 use atrium_portal_ipc::{AccentColor, ColorScheme, Contrast, DesktopPreferences, SettingsSnapshot};
-use atrium_portal_prompter::{ConfirmResponse, PrompterResponse};
 use zbus::blocking::Proxy;
-use zbus::zvariant::{ObjectPath, Value};
+use zbus::zvariant::OwnedValue;
 
 mod common;
-use common::{
-    KillOnDrop, daemon_command, fake_prompter, private_bus, read_prompter_appearance, temp_dir,
-    wait_for_name, write_prompter_response,
-};
+use common::{KillOnDrop, daemon_command, private_bus, temp_dir, wait_for_name};
 
 const PORTAL: &str = "org.freedesktop.impl.portal.desktop.atrium";
 const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
-const IFACE: &str = "org.freedesktop.impl.portal.Account";
+const IFACE: &str = "org.freedesktop.impl.portal.Settings";
+const APPEARANCE: &str = "org.freedesktop.appearance";
 
 /// A compositor that reports a fully-specified light appearance.
 #[derive(Default)]
@@ -43,11 +45,17 @@ impl Handler for LightCompositor {
     }
 }
 
-/// A compositor that stays silent (socket absent): the request must omit
-/// the appearance snapshot and the prompter falls back to its platform
-/// query.
+/// Read one appearance key through the backend interface. The *backend*
+/// method is `Read`; `ReadOne` exists only on the frontend facade.
+fn read(conn: &zbus::blocking::Connection, key: &str) -> OwnedValue {
+    let settings = Proxy::new(conn, PORTAL, DESKTOP_PATH, IFACE).expect("settings proxy");
+    settings
+        .call("Read", &(APPEARANCE, key))
+        .unwrap_or_else(|error| panic!("Read({key}) must succeed: {error}"))
+}
+
 #[test]
-fn preferences_reach_the_prompter_request() {
+fn preferences_reach_the_settings_projection() {
     let Some(bus) = private_bus() else {
         eprintln!("appearance: no dbus-daemon, skipping");
         return;
@@ -56,64 +64,47 @@ fn preferences_reach_the_prompter_request() {
 
     let data_dir = temp_dir("appearance-data");
     let runtime_dir = temp_dir("appearance-runtime");
-    let fixture_dir = temp_dir("appearance-prompter");
-
     let _server = Server::start(&runtime_dir.join("tessera.sock"), Arc::new(LightCompositor))
         .expect("start fake compositor");
 
-    let prompter = fake_prompter(&fixture_dir);
-    write_prompter_response(
-        &fixture_dir,
-        1,
-        &PrompterResponse::confirm(ConfirmResponse::Confirmed),
+    let _daemon = KillOnDrop(
+        daemon_command(&bus, &data_dir, &runtime_dir)
+            .spawn()
+            .expect("spawn portal daemon"),
     );
-
-    let mut command = daemon_command(&bus, &data_dir, &runtime_dir);
-    command
-        .env("ATRIUM_PORTAL_PROMPTER", &prompter)
-        .env("ATRIUM_PROMPTER_FIXTURE", &fixture_dir);
-    let _daemon = KillOnDrop(command.spawn().expect("spawn portal daemon"));
     wait_for_name(&conn, PORTAL);
 
-    let account = Proxy::new(&conn, PORTAL, DESKTOP_PATH, IFACE).expect("account proxy");
-    let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1/appr1")
-        .expect("request handle path");
-    let options: HashMap<String, Value<'_>> = HashMap::new();
-    let (response, _results): (u32, HashMap<String, zbus::zvariant::OwnedValue>) = account
-        .call(
-            "GetUserInformation",
-            &(handle, "dev.tessera.smoke", "", options),
-        )
-        .expect("GetUserInformation");
-    assert_eq!(response, 0);
-
-    let appearance = read_prompter_appearance(&fixture_dir, 1);
-    let appearance = appearance.expect("the request must carry an appearance snapshot");
-    assert_eq!(appearance.color_scheme, ColorScheme::Light);
+    let scheme = u32::try_from(read(&conn, "color-scheme")).expect("color-scheme is a u32");
     assert_eq!(
-        appearance.accent_color,
-        Some(AccentColor {
-            red: 43,
-            green: 101,
-            blue: 232
-        })
+        scheme, 2,
+        "light scheme projects as 2 (system=0, dark=1, light=2)"
     );
-    assert_eq!(appearance.contrast, Contrast::High);
-    assert!(appearance.reduced_motion);
+    let contrast = u32::try_from(read(&conn, "contrast")).expect("contrast is a u32");
+    assert_eq!(contrast, 1, "high contrast projects as 1");
+    let accent: (f64, f64, f64) = read(&conn, "accent-color")
+        .try_into()
+        .expect("accent is (ddd)");
+    // The accent projects as 8-bit channels divided by 255.
+    let expected = (43.0 / 255.0, 101.0 / 255.0, 232.0 / 255.0);
+    assert!(
+        (accent.0 - expected.0).abs() < 1e-6
+            && (accent.1 - expected.1).abs() < 1e-6
+            && (accent.2 - expected.2).abs() < 1e-6,
+        "accent {accent:?} does not match {expected:?}"
+    );
+    // The standardized key is a u32 flag (0/1), not a boolean.
+    let reduced = u32::try_from(read(&conn, "reduced-motion")).expect("reduced-motion is a u32");
+    assert_eq!(reduced, 1);
 
     let _ = std::fs::remove_dir_all(&data_dir);
     let _ = std::fs::remove_dir_all(&runtime_dir);
-    let _ = std::fs::remove_dir_all(&fixture_dir);
 }
 
-/// Without a compositor socket the backend's un-primed store still sends
-/// a snapshot — the all-defaults one (`system`, no accent). That is
-/// deliberate: a `system` scheme defers to the prompter's platform query
-/// exactly like an absent snapshot would, and the default projection is
-/// total over the preferences. What must NOT happen is a bogus concrete
-/// scheme or accent leaking from an un-primed store.
+/// Without a compositor socket the backend serves its un-primed store: the
+/// all-defaults projection (`system`, no accent), never a bogus concrete
+/// scheme left over from another session.
 #[test]
-fn missing_compositor_sends_the_default_snapshot() {
+fn a_missing_compositor_leaves_the_default_projection() {
     let Some(bus) = private_bus() else {
         eprintln!("appearance: no dbus-daemon, skipping");
         return;
@@ -122,45 +113,18 @@ fn missing_compositor_sends_the_default_snapshot() {
 
     let data_dir = temp_dir("appearance-none-data");
     let runtime_dir = temp_dir("appearance-none-runtime");
-    let fixture_dir = temp_dir("appearance-none-prompter");
-
-    let prompter = fake_prompter(&fixture_dir);
-    write_prompter_response(
-        &fixture_dir,
-        1,
-        &PrompterResponse::confirm(ConfirmResponse::Confirmed),
+    let _daemon = KillOnDrop(
+        daemon_command(&bus, &data_dir, &runtime_dir)
+            .spawn()
+            .expect("spawn portal daemon"),
     );
-
-    let mut command = daemon_command(&bus, &data_dir, &runtime_dir);
-    command
-        .env("ATRIUM_PORTAL_PROMPTER", &prompter)
-        .env("ATRIUM_PROMPTER_FIXTURE", &fixture_dir);
-    let _daemon = KillOnDrop(command.spawn().expect("spawn portal daemon"));
     wait_for_name(&conn, PORTAL);
 
-    let account = Proxy::new(&conn, PORTAL, DESKTOP_PATH, IFACE).expect("account proxy");
-    let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1/appr2")
-        .expect("request handle path");
-    let options: HashMap<String, Value<'_>> = HashMap::new();
-    let (response, _results): (u32, HashMap<String, zbus::zvariant::OwnedValue>) = account
-        .call(
-            "GetUserInformation",
-            &(handle, "dev.tessera.smoke", "", options),
-        )
-        .expect("GetUserInformation");
-    assert_eq!(response, 0);
-
-    // The un-primed store's snapshot is all-defaults: scheme `system`
-    // (which the prompter resolves through its platform query), no accent
-    // override, both accessibility flags clear.
-    let appearance = read_prompter_appearance(&fixture_dir, 1)
-        .expect("the backend always sends an appearance snapshot");
-    assert_eq!(appearance.color_scheme, ColorScheme::System);
-    assert_eq!(appearance.accent_color, None);
-    assert_eq!(appearance.contrast, Contrast::Normal);
-    assert!(!appearance.reduced_motion);
+    let scheme = u32::try_from(read(&conn, "color-scheme")).expect("color-scheme is a u32");
+    assert_eq!(scheme, 0, "an un-primed store reports `system`");
+    let contrast = u32::try_from(read(&conn, "contrast")).expect("contrast is a u32");
+    assert_eq!(contrast, 0, "an un-primed store reports normal contrast");
 
     let _ = std::fs::remove_dir_all(&data_dir);
     let _ = std::fs::remove_dir_all(&runtime_dir);
-    let _ = std::fs::remove_dir_all(&fixture_dir);
 }

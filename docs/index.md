@@ -8,8 +8,8 @@
   compositor wire contract and its version gates.
 - [Cast Frame Path](reference/cast-frame-path.md) describes the runtime
   pixel path behind a running cast: ownership split, pacing, transports.
-- [Prompter Process Contract](reference/prompter-process-contract.md)
-  summarizes the prompt envelopes and the notification daemon stream.
+- [Arca Chooser Contract](reference/arca-chooser-contract.md) summarizes the
+  versioned `arca --chooser-prompt` FileChooser stdio contract.
 - [Production Installation](how-to/install-production.md) installs and
   validates the backend.
 - [Architecture Decisions](adr/index.md) records durable repository-local

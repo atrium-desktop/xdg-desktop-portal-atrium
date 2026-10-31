@@ -54,43 +54,33 @@ sigil owns unlock prompting, including its PAM auto-unlock path
 files, and session-lock watcher are removed from this repository; no
 unlock material transits the portal.
 
-### Password Input and the IME
+### Password Input
 
-Typed passwords pass through the compositor's input method unmasked at the
-Wayland text-input layer: iris enables text input per surface, so there is
-no per-field content purpose marking the field as a password. The prompt
-itself masks the rendered text and the IME preedit, but a compositor-side
-input method observes the committed text. This limitation is documented in
-`crates/atrium-portal-prompter/src/ui/edit.rs` and lifting it requires an
-optics release.
+No repository binary prompts for a password. Secret unlock prompting is
+sigil's (ADR-0020), and the portal scope is not granted the compositor's
+`PromptSecret` op, so the backend cannot trigger a compositor-hosted secret
+prompt either (Tessera ADR-0112). The IME limitation recorded by earlier
+releases moved with the prompt code into the components that own it.
 
 ### Process and Memory Boundaries
 
-- The prompter accumulates a typed
-  password in a fixed 256-byte heap buffer (`SecretBuffer`) that is
-  `mlock`ed and `MADV_DONTDUMP`ed best-effort and never reallocated, so
-  growth cannot smear partial passwords across freed pages; the secret
-  response is `mlock`ed and dump-excluded during serialization, and the
-  backend `mlock`s every prompter response while parsing it (best
-  effort, warning only). Both
-  binaries cap `RLIMIT_CORE` at zero at startup so no core dump file is
-  written for them, and the `MADV_DONTDUMP` page markings keep key
-  material out of any dump image, including a piped core handler. The
-  processes deliberately stay dumpable: a non-dumpable process's
+- The backend caps `RLIMIT_CORE` at zero at startup so no core dump file is
+  written for it, and keeps itself dumpable: a non-dumpable process's
   `/proc/<pid>/exe` is unreadable, which would blind the compositor's
-  kernel-verified identity check for built-in IPC scope claims.
-  Honest residuals: per-frame transient strings in the prompter's input
-  path also live in platform and IME buffers by design, and the stdout
-  line writer holds bytes briefly during serialization — zeroing those
-  would be theater — and every buffer not named above stays pageable and
-  can still reach swap. Credential buffers are zeroized on drop, which
-  bounds but does not eliminate exposure.
-- The backend spawns one prompter process per interactive request, and the
-  child inherits the backend's environment. The `ATRIUM_PORTAL_PROMPTER`
-  environment variable overrides the prompter binary path, so any same-uid
-  process that controls the backend's environment can substitute the
-  prompt UI. Prompter responses are validated against the exact request
-  before they become portal results, but this validates shape, not intent.
+  kernel-verified identity check for built-in IPC scope claims. The Secret
+  adapter forwards sigil's bytes to the caller and persists nothing.
+- The backend spawns one `arca --chooser-prompt` child per FileChooser
+  request, and the child inherits the backend's environment.
+  `ATRIUM_FILE_CHOOSER_PROMPTER` overrides the arca binary path, so any
+  same-uid process that controls the backend's environment can substitute the
+  file-chooser UI. Chooser responses are validated against the exact request
+  before they become portal results (`validate_for`: absolute paths, the
+  mode's cardinality, an offered filter, offered choice values), but this
+  validates shape, not intent.
+- Every other prompt is a compositor round-trip. The backend sends only the
+  text the interface supplies (a title, a body, an affirmative label, or a
+  list of desktop-file ids) and reads back the answer; the rendering process,
+  its input handling, and its memory are the compositor's.
 - Compositor capture payloads travel as sealed memfds; the portal trusts
   the compositor it negotiates with and applies the scoped
   `atrium-portal` capability set

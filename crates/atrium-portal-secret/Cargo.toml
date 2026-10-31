@@ -10,7 +10,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-atrium-portal-runtime.workspace = true
+atrium-portal-request.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true

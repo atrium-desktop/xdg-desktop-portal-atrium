@@ -1,0 +1,19 @@
+[package]
+name = "atrium-portal-apps"
+description = "Freedesktop Desktop Entry and MIME Apps resolution for the atrium portal"
+readme = "README.md"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
+
+[lib]
+name = "atrium_portal_apps"
+path = "src/lib.rs"

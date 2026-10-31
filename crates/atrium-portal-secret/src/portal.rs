@@ -16,8 +16,8 @@ use std::os::fd::{AsFd, FromRawFd, IntoRawFd};
 use std::sync::{Arc, Mutex};
 
 use crate::native::{NativeError, SigilConnection};
-use atrium_portal_runtime::RequestTracker;
-use atrium_portal_runtime::sync;
+use atrium_portal_request::RequestTracker;
+use atrium_portal_request::sync;
 use zbus::zvariant::{Fd, ObjectPath, Value};
 
 /// The served interface version.
@@ -43,9 +43,9 @@ impl SecretIface {
         let path = handle.as_str().to_string();
         log::info!("portal: RetrieveSecret for '{app_id}' at {path}");
 
-        atrium_portal_runtime::register(self.conn.inner(), &self.tracker, &path).await?;
+        atrium_portal_request::register(self.conn.inner(), &self.tracker, &path).await?;
         let response = self.run(&path, &app_id, fd).await;
-        atrium_portal_runtime::finish(self.conn.inner(), &self.tracker, &path).await;
+        atrium_portal_request::finish(self.conn.inner(), &self.tracker, &path).await;
         response
     }
 

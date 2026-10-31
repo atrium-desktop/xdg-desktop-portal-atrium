@@ -22,7 +22,10 @@
 | [0018](0018-compositor-appearance-and-adaptive-sizing.md) | Compositor-owned appearance and adaptive dialog sizing | Superseded by [0021](0021-headless-portal-and-optics-retirement.md) |
 | [0019](0019-vault-lock-follows-the-session-lock-boundary.md) | The vault lock state follows the session lock boundary | Accepted (implementation owned by sigil, see [0020](0020-secret-vault-delegation-to-sigil.md)) |
 | [0020](0020-secret-vault-delegation-to-sigil.md) | Secret vault delegation to sigil | Accepted |
-| [0021](0021-headless-portal-and-optics-retirement.md) | Headless portal architecture, prompt delegation to companion components, and optics retirement | Accepted |
+| [0021](0021-headless-portal-and-optics-retirement.md) | Headless portal architecture, prompt delegation to companion components, and optics retirement | Accepted (prompter crate carve-out superseded by [0026](0026-prompter-process-retirement.md)) |
 | [0022](0022-stateless-deterministic-secret-pipeline-and-memory-hardening.md) | Stateless deterministic secret pipeline and zero-trace memory hardening | Accepted |
 | [0023](0023-sigil-wire-v2-binary-protocol-and-zero-allocation-hardening.md) | sigil-wire-v2 binary protocol and zero-allocation hardening | Accepted |
 | [0024](0024-protocol-32-projection.md) | The protocol-32 projection (session-scoped virtual extend outputs) | Accepted |
+| [0025](0025-workspace-crate-topology.md) | Workspace crate topology | Accepted |
+| [0026](0026-prompter-process-retirement.md) | Prompter process retirement and companion prompt ownership | Accepted (supersedes the compatibility carve-out in [0021](0021-headless-portal-and-optics-retirement.md)) |
+| [0027](0027-arca-chooser-contract-crate.md) | The arca FileChooser contract crate | Accepted |

@@ -239,6 +239,126 @@ pub(crate) fn set_wallpaper(socket: &Path, staged: &Path) -> io::Result<()> {
     }
 }
 
+/// The compositor's consent surface: a heading, an explanation, and one
+/// affirmative label. The backends compose this from their interface's
+/// arguments; the compositor owns the rendering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConsentPrompt {
+    pub(crate) title: String,
+    pub(crate) body: String,
+    pub(crate) accept_label: Option<String>,
+}
+
+/// The compositor protocol that introduced user-consent confirmation
+/// (`PickConfirm` → `ConfirmPicked`).
+///
+/// A compositor older than this cannot render the prompt at all, so an
+/// interface that needs consent must answer a truthful failure rather than
+/// send an op the peer cannot parse. The negotiated floor (24) is *not* this
+/// value: it only says which ops the projection can speak, not which ones the
+/// compositor implements.
+pub(crate) const PICK_CONFIRM_PROTOCOL: u32 = 16;
+
+/// The compositor protocol that introduced user-consent application picking
+/// (`PickApp` → `AppPicked`).
+pub(crate) const PICK_APP_PROTOCOL: u32 = 14;
+
+/// The outcome of one compositor-rendered consent question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Consent {
+    /// The user accepted.
+    Granted,
+    /// The user dismissed the prompt.
+    Cancelled,
+}
+
+/// Ask one yes/no consent question through compositor chrome (ADR-0026).
+///
+/// `title` heads the dialog, `body` explains the request, and `accept_label`
+/// overrides the affirmative button. The compositor owns the surface, the
+/// interaction timeout, and the authorization; this helper owns only the
+/// portal's mapping from that answer to a response code.
+///
+/// The connection is per call, like [`set_wallpaper`]: a consent question is
+/// rare, and a fresh handshake means a compositor restart can never leave a
+/// stale lease behind a prompt. No retry: reconnecting would orphan a prompt
+/// the user may still be looking at, and the compositor bounds the wait
+/// itself.
+pub(crate) fn request_consent(
+    socket: &Path,
+    title: &str,
+    body: &str,
+    accept_label: Option<&str>,
+) -> io::Result<Consent> {
+    let mut client = connect_compositor(socket, RPC_TIMEOUT)?;
+    // Gate on the version this handshake actually negotiated, not the cached
+    // one: the cache is a property-read shortcut, and a prompt must reflect
+    // the peer that is about to answer it.
+    let negotiated = client.protocol_version();
+    remember_protocol_version(negotiated);
+    if negotiated < PICK_CONFIRM_PROTOCOL {
+        return Err(io::Error::other(format!(
+            "the compositor speaks protocol {negotiated}; consent prompts need \
+             {PICK_CONFIRM_PROTOCOL} or newer"
+        )));
+    }
+    client.set_io_timeout(Some(INTERACTION_TIMEOUT))?;
+    match client.pick_confirm(
+        title.to_owned(),
+        body.to_owned(),
+        accept_label.map(str::to_owned),
+    )? {
+        atrium_portal_ipc::ConfirmPickResult::Confirmed => Ok(Consent::Granted),
+        atrium_portal_ipc::ConfirmPickResult::Cancelled => Ok(Consent::Cancelled),
+    }
+}
+
+/// Ask the user to choose one application through compositor chrome
+/// (ADR-0026: the AppChooser portal's compositor side). `choices` are desktop
+/// file ids; `subject` is a human-readable context line. Same
+/// per-call connection and no-retry discipline as [`request_consent`].
+pub(crate) fn request_app_choice(
+    socket: &Path,
+    choices: Vec<String>,
+    subject: Option<String>,
+    last_choice: Option<String>,
+) -> io::Result<atrium_portal_ipc::AppPickResult> {
+    let mut client = connect_compositor(socket, RPC_TIMEOUT)?;
+    let negotiated = client.protocol_version();
+    remember_protocol_version(negotiated);
+    if negotiated < PICK_APP_PROTOCOL {
+        return Err(io::Error::other(format!(
+            "the compositor speaks protocol {negotiated}; application picking needs \
+             {PICK_APP_PROTOCOL} or newer"
+        )));
+    }
+    client.set_io_timeout(Some(INTERACTION_TIMEOUT))?;
+    client.pick_app(choices, subject, last_choice)
+}
+
+/// Push one notification into the compositor's queue (the Notification
+/// portal, ADR-0026). The connection is per call like [`request_consent`]: a
+/// notification is cheap and independent, and a fresh handshake means a
+/// compositor restart can never leave a stale lease behind a delivery.
+pub(crate) fn post_notification(
+    socket: &Path,
+    summary: &str,
+    body: &str,
+    app_id: Option<String>,
+    external_id: Option<String>,
+) -> io::Result<()> {
+    let mut client = connect_compositor(socket, RPC_TIMEOUT)?;
+    client.notify(summary.to_owned(), body.to_owned(), app_id, external_id)
+}
+
+/// Resolve the compositor socket from `$XDG_RUNTIME_DIR`, the same rule
+/// [`crate::run`] applies at startup.
+pub(crate) fn compositor_socket() -> io::Result<PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|dir| PathBuf::from(dir).join("tessera.sock"))
+        .ok_or_else(|| io::Error::other("$XDG_RUNTIME_DIR is unset; cannot locate tessera.sock"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +384,30 @@ mod tests {
                 height: 2,
                 png: vec![0x89, b'P', b'N', b'G'],
             })
+        }
+
+        fn pick_confirm(
+            &self,
+            _connection: u64,
+            _title: String,
+            _body: String,
+            _accept_label: Option<String>,
+        ) -> Result<atrium_portal_ipc::ConfirmPickResult, String> {
+            Ok(atrium_portal_ipc::ConfirmPickResult::Confirmed)
+        }
+
+        fn pick_app(
+            &self,
+            _connection: u64,
+            choices: Vec<String>,
+            _subject: Option<String>,
+            _last_choice: Option<String>,
+        ) -> Result<atrium_portal_ipc::AppPickResult, String> {
+            choices
+                .first()
+                .cloned()
+                .map(|id| atrium_portal_ipc::AppPickResult::App { id })
+                .ok_or_else(|| "no application offered".to_string())
         }
     }
 
@@ -340,5 +484,66 @@ mod tests {
             remembered >= atrium_portal_ipc::MIN_PROTOCOL_VERSION,
             "the cached value is never below the floor"
         );
+    }
+
+    /// A compositor that predates `PickConfirm` must be refused a consent
+    /// prompt rather than sent an op it cannot parse. This is the regression
+    /// the prompt re-ownership would otherwise introduce for old peers: before
+    /// ADR-0026 these interfaces worked through the (unbuilt) prompter binary.
+    #[test]
+    fn consent_degrades_on_a_compositor_without_pick_confirm() {
+        let socket = temp_socket("gate-confirm");
+        let fake = Arc::new(FakeCompositor {
+            fail: std::sync::atomic::AtomicBool::new(false),
+        });
+        let _server = Server::start_capped(&socket, Arc::clone(&fake), 15)
+            .expect("a protocol-15 server starts");
+        let error = request_consent(&socket, "Share", "Allow?", Some("Share"))
+            .expect_err("a protocol-15 compositor cannot render consent");
+        assert!(
+            error.to_string().contains("protocol 15"),
+            "the error must name the shortfall: {error}"
+        );
+        let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+    }
+
+    /// The same for `PickApp`: protocol 13 predates application picking.
+    #[test]
+    fn app_choice_degrades_on_a_compositor_without_pick_app() {
+        let socket = temp_socket("gate-app");
+        let fake = Arc::new(FakeCompositor {
+            fail: std::sync::atomic::AtomicBool::new(false),
+        });
+        let _server = Server::start_capped(&socket, Arc::clone(&fake), 13)
+            .expect("a protocol-13 server starts");
+        let error = request_app_choice(&socket, vec!["a.desktop".to_owned()], None, None)
+            .expect_err("a protocol-13 compositor cannot render an app picker");
+        assert!(
+            error.to_string().contains("protocol 13"),
+            "the error must name the shortfall: {error}"
+        );
+        let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+    }
+
+    /// At or above the introducing version the prompt is actually delivered.
+    #[test]
+    fn prompts_reach_a_compositor_that_supports_them() {
+        let socket = temp_socket("gate-ok");
+        let fake = Arc::new(FakeCompositor {
+            fail: std::sync::atomic::AtomicBool::new(false),
+        });
+        let _server = Server::start_capped(&socket, Arc::clone(&fake), 16)
+            .expect("a protocol-16 server starts");
+        assert_eq!(
+            request_consent(&socket, "Share", "Allow?", Some("Share")).unwrap(),
+            Consent::Granted
+        );
+        assert_eq!(
+            request_app_choice(&socket, vec!["a.desktop".to_owned()], None, None).unwrap(),
+            atrium_portal_ipc::AppPickResult::App {
+                id: "a.desktop".to_owned()
+            }
+        );
+        let _ = std::fs::remove_dir_all(socket.parent().unwrap());
     }
 }

@@ -15,6 +15,67 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Every interactive prompt now reaches the component that owns it ([ADR-0026](docs/adr/0026-prompter-process-retirement.md)).**
+  The legacy `atrium-portal-prompter` process is retired, not merely unbuilt:
+  consent (Account, Access, Background, Wallpaper preview) is compositor
+  `PickConfirm` chrome, application choice (AppChooser, OpenURI) is `PickApp`,
+  ScreenCast source/target selection is `PickTarget`, and notifications are
+  `Command::Notify` on the compositor's own queue. The wire projection gains
+  `PickApp`/`AppPicked`, `Do`/`Command` (`Notify`, `DismissNotification`), and
+  their test-server handlers. On a conforming install these prompts previously
+  resolved to a missing-binary error, because the crate ADR-0021 kept for
+  compatibility declared no `[[bin]]`.
+
+### Removed
+
+- **`org.freedesktop.impl.portal.DynamicLauncher` ([ADR-0026](docs/adr/0026-prompter-process-retirement.md)).**
+  Its backend surface is an editable launcher form, and no companion component
+  owns a form surface. The interface is no longer advertised or routed; the
+  frontend now reports a truthful capability gap instead of failing a dialog
+  that could not be rendered.
+- **`atrium-portal-prompter` ([ADR-0026](docs/adr/0026-prompter-process-retirement.md), [ADR-0027](docs/adr/0027-arca-chooser-contract-crate.md)).**
+  Replaced by `atrium-arca-contract`, which defines only the `arca
+  --chooser-prompt` FileChooser stdio contract with its own
+  `ARCA_CONTRACT_VERSION` (restarting at 1). `ATRIUM_PORTAL_PROMPTER` is gone;
+  `ATRIUM_FILE_CHOOSER_PROMPTER` overrides the arca executable.
+
+### Fixed
+
+- **Consent, application choice, source choice, and notifications work again.**
+  All of them previously failed with "atrium-portal-prompter was not found".
+- **`OpenURI` now answers to its specification name.** zbus derived the D-Bus
+  member from the Rust identifier and exported `OpenUri`, while the interface
+  defines `OpenURI`; the frontend's call therefore resolved to
+  `UnknownMethod`. The member name is now pinned explicitly. This predates the
+  prompt work and was found by the new end-to-end test.
+- **Prompts degrade on compositors that predate them.** `PickConfirm`
+  (protocol 16) and `PickApp` (protocol 14) are gated on the version the
+  handshake actually negotiated, so a protocol-24 peer is never sent an op it
+  cannot parse; the interface answers the portal's failure code instead of
+  failing obscurely. The independent test server models the same refusal.
+
+### Changed (structure)
+
+- **Workspace crate topology ([ADR-0025](docs/adr/0025-workspace-crate-topology.md)).**
+  A crate now exists only for an isolation boundary or an independent consumer:
+  - `atrium-portal-cast` takes the PipeWire producer stream, becoming the
+    repository's only native-library and `unsafe` boundary; the daemon no
+    longer links `libpipewire`.
+  - `atrium-portal-apps` takes freedesktop Desktop Entry, MIME Apps, and `Exec`
+    resolution out of the daemon, giving it a unit-test and fuzz surface with
+    no daemon process.
+  - `atrium-portal-runtime` is renamed `atrium-portal-request`: it owns the
+    portal `Request` lifecycle and nothing else.
+  - ScreenCast's session registry and restore-token store move into
+    `src/screencast/`, because deleting ScreenCast must delete them.
+  - `src/files.rs` is dissolved into `fsx::atomic`, `uri`, and the Screenshot
+    cache.
+- **Workspace lint policy.** Every member inherits one `[workspace.lints]`
+  table, and crates with no `unsafe` carry `#![forbid(unsafe_code)]`. The new
+  `undocumented_unsafe_blocks` deny makes every `unsafe` block justify itself.
+
 ## [0.0.33] - 2026-10-30
 
 ### Added

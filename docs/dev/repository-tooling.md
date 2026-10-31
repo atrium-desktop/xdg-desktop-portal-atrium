@@ -67,16 +67,18 @@ optics release is the manual inverse: bump every tagged dependency in
 script's expected package count in sync if a sixth optics crate is ever
 added.
 
-## Prompter `build.rs` Rpath Re-Emission
+## Native Dependency Boundary
 
-`rustc-link-arg` does not propagate across crates, so the terminal
-binary must re-emit the optics library paths itself.
-`crates/atrium-portal-prompter/build.rs` reads the `DEP_IRIS_RPATHS`,
-`DEP_LENS_RPATHS`, and `DEP_FLUX_RPATHS` metadata published by the optics
-`-sys` crates and re-emits them as link search paths plus `DT_RPATH`
-entries (via `-Wl,--disable-new-dtags`, so the search also covers
-transitive `NEEDED` libraries such as liblens under libiris). This keeps
-the prompter loading the chosen libflux/liblens/libiris both for
-system-installed optics and for the opt-in local optics override. The
-prompter's direct `flux-sys`/`iris-sys`/`lens-sys` dependencies exist only
-to make that metadata visible; do not prune them.
+ADR-0025 concentrates every native-library dependency and every `unsafe`
+block in `crates/atrium-portal-cast` (the `pipewire` binding and `libc`).
+Nothing else in the workspace links them, so:
+
+- interface work, unit tests, and `atrium-portal-ipc` do not need the PipeWire
+  development packages installed;
+- a dependency or link-flag change is scoped to one crate;
+- `cargo clippy --workspace` enforces `undocumented_unsafe_blocks`, so every
+  `unsafe` block in that crate carries a `SAFETY:` justification.
+
+The daemon does keep `libc` for `getpwuid`, `sysconf`, and `setrlimit`, and
+`atrium-portal-ipc` keeps it for sealed-memfd handling; both are audited the
+same way.

@@ -5,23 +5,31 @@
 backend for the Tessera desktop. It translates freedesktop portal D-Bus
 requests into Portal-owned services and, only for compositor resources, a
 narrow projection of Tessera IPC (protocol 32, negotiating down to 24). It
-publishes ScreenCast streams
-through PipeWire and routes the per-application Secret portal to the
-sigil secret service.
+publishes ScreenCast streams through PipeWire, routes the per-application
+Secret portal to the sigil secret service, and delegates every interactive
+prompt to the component that owns it: Arca renders the file chooser and the
+compositor renders consent, application choice, source choice, and
+notifications ([ADR-0026](docs/adr/0026-prompter-process-retirement.md)).
 
-The repository builds a D-Bus-activated headless daemon from a small Cargo workspace:
+The repository builds a D-Bus-activated headless daemon from a deliberately
+small workspace ([ADR-0025](docs/adr/0025-workspace-crate-topology.md)). Each
+member exists for an isolation boundary or an independent consumer:
 
-- `xdg-desktop-portal-atrium` assembles the backend interfaces, IPC adapters,
-  and workers.
+- `xdg-desktop-portal-atrium` assembles the backend interfaces and workers.
 - `atrium-portal-ipc` implements the settings, capture, picking, streaming,
-  and wallpaper wire contract without depending on Tessera source crates.
-- `atrium-portal-prompter` defines the versioned, out-of-process data contract
-  for companion prompts (FileChooser via Arca, PickTarget/PickApp/PickConfirm
-  via Tessera).
-- `atrium-portal-runtime` owns the shared portal Request lifecycle.
+  wallpaper, and notification wire contract without depending on Tessera
+  source crates.
+- `atrium-portal-cast` owns the PipeWire producer stream. It is the
+  repository's only native-library and `unsafe` boundary, so interface work
+  and unit tests do not require the system binding.
+- `atrium-portal-apps` resolves freedesktop desktop entries, MIME
+  associations, and `Exec` launches.
+- `atrium-portal-request` owns the portal `Request` lifecycle.
 - `atrium-portal-secret` projects the native Secret backend onto the
   sigil daemon's IPC socket (ADR-0020); storage, unlock, and lock state
   are sigil's responsibilities.
+- `atrium-arca-contract` defines the versioned `arca --chooser-prompt` stdio
+  contract ([ADR-0027](docs/adr/0027-arca-chooser-contract-crate.md)).
 
 ## Compatibility
 
@@ -49,13 +57,13 @@ cargo test --locked --workspace
 Build and stage the production installation with:
 
 ```bash
-cargo build --locked --release -p xdg-desktop-portal-atrium -p atrium-portal-prompter
+cargo build --locked --release -p xdg-desktop-portal-atrium
 DESTDIR="$PWD/stage" ./scripts/install.sh --prefix /usr --no-build
 ```
 
-The install script places both private executables under `libexecdir`,
-generates the D-Bus activation file with that exact path, and installs the
-portal metadata and routing configuration. A production installation needs
+The install script places the private daemon under `libexecdir`, generates the
+D-Bus activation file with that exact path, and installs the portal metadata
+and routing configuration. A production installation needs
 no other portal
 backend: every routed interface is served natively, and Secret retrieval
 additionally requires the sigil daemon. Vault auto-unlock and the vault

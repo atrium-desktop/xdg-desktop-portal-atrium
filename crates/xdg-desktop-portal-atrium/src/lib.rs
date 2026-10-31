@@ -14,7 +14,6 @@
 //! and `org.freedesktop.impl.portal.AppChooser` v4,
 //! and `org.freedesktop.impl.portal.OpenURI` v3,
 //! and `org.freedesktop.impl.portal.Background` v1,
-//! and `org.freedesktop.impl.portal.DynamicLauncher` v1,
 //! and `org.freedesktop.impl.portal.Inhibit` v3,
 //! and `org.freedesktop.impl.portal.Notification` v2,
 //! and `org.freedesktop.impl.portal.Wallpaper` v1,
@@ -40,37 +39,28 @@
 //! bus, and every screencast runs its own PipeWire main loop on a dedicated
 //! cast thread.
 
-mod access;
-mod account;
-mod app_chooser;
-mod apps;
-mod background;
-mod cast;
-mod dynamic_launcher;
-mod email;
-mod file_chooser;
-mod files;
-mod inhibit;
+mod companion;
+mod fsx;
+mod iface;
+
+// The assembly below names each interface by its own module; the `iface`
+// parent exists to keep the interface files in one place (ADR-0025 §3).
+pub(crate) use iface::{
+    access, account, app_chooser, background, email, file_chooser, inhibit, lockdown, notification,
+    open_uri, print, screenshot, settings, wallpaper,
+};
+
+pub(crate) use fsx::atomic;
 mod ipc;
-mod lockdown;
-mod notification;
-mod open_uri;
-mod persist;
-mod print;
-mod prompter;
 mod screencast;
-mod screenshot;
-mod session;
-mod settings;
-mod wallpaper;
+mod uri;
 
 use std::sync::{Arc, Mutex, mpsc};
 
-use atrium_portal_runtime::RequestTracker;
+use atrium_portal_request::RequestTracker;
 use atrium_portal_secret::{SecretError, SecretService};
-use screencast::{CastJob, ScreenCastIface};
+use screencast::{CastJob, RestoreStore, ScreenCastIface, SessionRegistry};
 use screenshot::{CaptureJob, ScreenshotIface};
-use session::SessionRegistry;
 use settings::{SettingsIface, SettingsStore};
 
 /// The well-known bus name the portal frontend resolves through the
@@ -119,7 +109,7 @@ fn spawn_worker(
 /// their owner's unique name vanishes from the bus.
 fn spawn_restore_watcher(
     conn: zbus::blocking::Connection,
-    store: Arc<Mutex<persist::RestoreStore>>,
+    store: Arc<Mutex<RestoreStore>>,
 ) -> Result<(), PortalError> {
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
@@ -143,7 +133,7 @@ fn spawn_restore_watcher(
             // Only unique-name departures matter: the name is the token
             // owner key, and a well-known name's owner change keeps it.
             if args.new_owner().is_none() && args.name().as_str().starts_with(':') {
-                atrium_portal_runtime::sync::lock(&store, "screencast restore store")
+                atrium_portal_request::sync::lock(&store, "screencast restore store")
                     .drop_owner(args.name().as_str());
             }
         }
@@ -159,7 +149,7 @@ pub fn run() -> Result<(), PortalError> {
     let socket = std::path::PathBuf::from(runtime_dir).join("tessera.sock");
 
     // Global PipeWire setup for every future cast thread (idempotent).
-    pipewire::init();
+    atrium_portal_cast::init();
 
     let conn = zbus::blocking::connection::Builder::session()?
         .build()
@@ -167,7 +157,7 @@ pub fn run() -> Result<(), PortalError> {
 
     let tracker = Arc::new(Mutex::new(RequestTracker::default()));
     let sessions = Arc::new(Mutex::new(SessionRegistry::default()));
-    let restore_store = Arc::new(Mutex::new(persist::RestoreStore::load(persist::data_dir())));
+    let restore_store = Arc::new(Mutex::new(RestoreStore::load(screencast::data_dir())));
     const MAX_QUEUED_REQUESTS: usize = 128;
     let (jobs, rx) = mpsc::sync_channel::<CaptureJob>(MAX_QUEUED_REQUESTS);
     let (cast_jobs, cast_rx) = mpsc::sync_channel::<CastJob>(MAX_QUEUED_REQUESTS);
@@ -181,8 +171,6 @@ pub fn run() -> Result<(), PortalError> {
         mpsc::sync_channel::<open_uri::OpenUriJob>(MAX_QUEUED_REQUESTS);
     let (background_jobs, background_rx) =
         mpsc::sync_channel::<background::BackgroundJob>(MAX_QUEUED_REQUESTS);
-    let (dynamic_launcher_jobs, dynamic_launcher_rx) =
-        mpsc::sync_channel::<dynamic_launcher::DynamicLauncherJob>(MAX_QUEUED_REQUESTS);
     let (wallpaper_jobs, wallpaper_rx) =
         mpsc::sync_channel::<wallpaper::WallpaperJob>(MAX_QUEUED_REQUESTS);
     let (print_jobs, print_rx) = mpsc::sync_channel::<print::PrintJob>(MAX_QUEUED_REQUESTS);
@@ -276,28 +264,21 @@ pub fn run() -> Result<(), PortalError> {
             jobs: background_jobs.clone(),
         },
     )?;
-    conn.object_server().at(
-        DESKTOP_PATH,
-        dynamic_launcher::DynamicLauncherIface {
-            conn: conn.inner().clone(),
-            tracker: Arc::clone(&tracker),
-            jobs: dynamic_launcher_jobs.clone(),
-        },
-    )?;
     // Inhibit calls logind in-method (one fast system-bus round trip); no
     // worker, no compositor IPC.
     conn.object_server().at(
         DESKTOP_PATH,
         inhibit::InhibitIface::new(conn.inner().clone(), Arc::clone(&tracker)),
     )?;
-    // Notification supervises the daemon-mode prompter itself (lazily
-    // spawned on the first AddNotification); no worker, no Request objects.
-    // One daemon manager shared by the Notification interface and the
-    // settings watcher: appearance changes re-skin the live cards.
-    let notify_daemon = Arc::new(std::sync::Mutex::new(notification::DaemonManager::default()));
+    // Notification forwards to the compositor's queue (ADR-0026): no worker,
+    // no Request objects, and no appearance plumbing -- the compositor skins
+    // its own cards from the desktop preferences it already owns.
+    let notify_live = Arc::new(std::sync::Mutex::new(
+        notification::LiveNotifications::default(),
+    ));
     conn.object_server().at(
         DESKTOP_PATH,
-        notification::NotificationIface::new(conn.clone(), Arc::clone(&notify_daemon)),
+        notification::NotificationIface::new(Arc::clone(&notify_live)),
     )?;
     conn.object_server().at(
         DESKTOP_PATH,
@@ -328,7 +309,6 @@ pub fn run() -> Result<(), PortalError> {
     let cast_worker_tracker = Arc::clone(&tracker);
     let cast_worker_socket = socket.clone();
     let cast_worker_store = Arc::clone(&restore_store);
-    let cast_worker_settings = settings_store.clone();
     spawn_worker("atrium-portal-screencast", move || {
         screencast::cast_worker(
             cast_rx,
@@ -338,7 +318,6 @@ pub fn run() -> Result<(), PortalError> {
             sessions,
             cast_worker_store,
             cast_worker_socket,
-            cast_worker_settings,
         )
     })?;
 
@@ -349,61 +328,39 @@ pub fn run() -> Result<(), PortalError> {
     // FileChooser dispatches one supervised UI task/process per request and
     // never shares the compositor capture worker.
     let file_chooser_tracker = Arc::clone(&tracker);
-    let file_chooser_settings = settings_store.clone();
     spawn_worker("atrium-portal-file-chooser", move || {
-        file_chooser::file_chooser_worker(
-            file_chooser_rx,
-            file_chooser_tracker,
-            file_chooser_settings,
-        )
+        file_chooser::file_chooser_worker(file_chooser_rx, file_chooser_tracker)
     })?;
 
     let account_tracker = Arc::clone(&tracker);
-    let account_settings = settings_store.clone();
     spawn_worker("atrium-portal-account", move || {
-        account::account_worker(account_rx, account_tracker, account_settings)
+        account::account_worker(account_rx, account_tracker)
     })?;
 
     let access_tracker = Arc::clone(&tracker);
-    let access_settings = settings_store.clone();
     spawn_worker("atrium-portal-access", move || {
-        access::access_worker(access_rx, access_tracker, access_settings)
+        access::access_worker(access_rx, access_tracker)
     })?;
 
     // AppChooser uses the same per-request supervised prompter pattern as
     // Access; candidate resolution happens in the served method.
     let app_chooser_tracker = Arc::clone(&tracker);
-    let app_chooser_settings = settings_store.clone();
     spawn_worker("atrium-portal-app-chooser", move || {
-        app_chooser::app_chooser_worker(app_chooser_rx, app_chooser_tracker, app_chooser_settings)
+        app_chooser::app_chooser_worker(app_chooser_rx, app_chooser_tracker)
     })?;
 
     // OpenURI launches resolved applications itself and reuses the
     // AppChooser dialog when the user must pick one.
     let open_uri_tracker = Arc::clone(&tracker);
-    let open_uri_settings = settings_store.clone();
     spawn_worker("atrium-portal-open-uri", move || {
-        open_uri::open_uri_worker(open_uri_rx, open_uri_tracker, open_uri_settings)
+        open_uri::open_uri_worker(open_uri_rx, open_uri_tracker)
     })?;
 
     // Background consent uses the same supervised confirmation prompt as
     // Access; the autostart entry write happens on the worker task.
     let background_tracker = Arc::clone(&tracker);
-    let background_settings = settings_store.clone();
     spawn_worker("atrium-portal-background", move || {
-        background::background_worker(background_rx, background_tracker, background_settings)
-    })?;
-
-    // DynamicLauncher's backend surface is the install-confirmation dialog
-    // only; the frontend performs the actual installation.
-    let dynamic_launcher_tracker = Arc::clone(&tracker);
-    let dynamic_launcher_settings = settings_store.clone();
-    spawn_worker("atrium-portal-dynamic-launcher", move || {
-        dynamic_launcher::dynamic_launcher_worker(
-            dynamic_launcher_rx,
-            dynamic_launcher_tracker,
-            dynamic_launcher_settings,
-        )
+        background::background_worker(background_rx, background_tracker)
     })?;
 
     // Wallpaper crosses the compositor IPC and does slow image I/O, so it
@@ -412,14 +369,8 @@ pub fn run() -> Result<(), PortalError> {
     wallpaper::clean_staging();
     let wallpaper_tracker = Arc::clone(&tracker);
     let wallpaper_socket = socket.clone();
-    let wallpaper_settings = settings_store.clone();
     spawn_worker("atrium-portal-wallpaper", move || {
-        wallpaper::wallpaper_worker(
-            wallpaper_rx,
-            wallpaper_tracker,
-            wallpaper_socket,
-            wallpaper_settings,
-        )
+        wallpaper::wallpaper_worker(wallpaper_rx, wallpaper_tracker, wallpaper_socket)
     })?;
 
     // Print spools the document and hands it to the system `lp` client
@@ -429,13 +380,12 @@ pub fn run() -> Result<(), PortalError> {
         print::print_worker(print_rx, print_tracker)
     })?;
 
-    settings::spawn_watcher(conn.clone(), socket, settings_store, notify_daemon)
-        .map_err(PortalError::Worker)?;
+    settings::spawn_watcher(conn.clone(), socket, settings_store).map_err(PortalError::Worker)?;
 
     conn.request_name(BUS_NAME)?;
 
     log::info!(
-        "portal: serving Settings+Screenshot+ScreenCast+Secret+Lockdown+FileChooser+Email+Account+Access+AppChooser+OpenURI+Background+DynamicLauncher+Inhibit+Notification+Wallpaper+Print as {BUS_NAME}"
+        "portal: serving Settings+Screenshot+ScreenCast+Secret+Lockdown+FileChooser+Email+Account+Access+AppChooser+OpenURI+Background+Inhibit+Notification+Wallpaper+Print as {BUS_NAME}"
     );
 
     // Keep the main thread tied to the bus connection. A disconnected
@@ -503,7 +453,6 @@ mod integration_metadata_tests {
                 "org.freedesktop.impl.portal.AppChooser",
                 "org.freedesktop.impl.portal.OpenURI",
                 "org.freedesktop.impl.portal.Background",
-                "org.freedesktop.impl.portal.DynamicLauncher",
                 "org.freedesktop.impl.portal.Inhibit",
                 "org.freedesktop.impl.portal.Notification",
                 "org.freedesktop.impl.portal.Wallpaper",
@@ -536,7 +485,6 @@ mod integration_metadata_tests {
                 "AppChooser",
                 "OpenURI",
                 "Background",
-                "DynamicLauncher",
                 "Inhibit",
                 "Notification",
                 "Wallpaper",

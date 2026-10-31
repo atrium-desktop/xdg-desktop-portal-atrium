@@ -45,6 +45,7 @@ type StreamStart = (
 struct FakeCompositor {
     captures: Mutex<Vec<Option<atrium_portal_ipc::Rect>>>,
     picks: Mutex<Vec<PickKind>>,
+    pick_response: Mutex<Option<PickResult>>,
     confirms: Mutex<Vec<(String, String)>>,
     stream_starts: Mutex<Vec<StreamStart>>,
     stream_stops: Mutex<Vec<u64>>,
@@ -69,6 +70,10 @@ struct FakeCompositor {
     releases: Mutex<Vec<(u64, u32)>>,
     /// The connection that last started a stream (the cast connection).
     stream_conn: Mutex<Option<u64>>,
+    /// Queued target-pick answers; the default is the whole desktop.
+    target_answers: Mutex<Vec<PickResult>>,
+    /// Queued consent answers; the default is `Confirmed`.
+    consent_answers: Mutex<Vec<ConfirmPickResult>>,
 }
 
 impl FakeCompositor {
@@ -106,6 +111,12 @@ impl Handler for FakeCompositor {
 
     fn pick_target(&self, _conn_id: u64, kind: PickKind) -> Result<PickResult, String> {
         self.picks.lock().unwrap().push(kind);
+        if let Some(resp) = self.pick_response.lock().unwrap().take() {
+            return Ok(resp);
+        }
+        if let Some(resp) = self.target_answers.lock().unwrap().pop() {
+            return Ok(resp);
+        }
         Ok(match kind {
             PickKind::Region => PickResult::Region {
                 rect: atrium_portal_ipc::Rect::new(10, 20, 30, 40),
@@ -131,7 +142,12 @@ impl Handler for FakeCompositor {
         _accept_label: Option<String>,
     ) -> Result<ConfirmPickResult, String> {
         self.confirms.lock().unwrap().push((title, body));
-        Ok(ConfirmPickResult::Confirmed)
+        Ok(self
+            .consent_answers
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap_or(ConfirmPickResult::Confirmed))
     }
 
     fn stream_output_start(
@@ -566,29 +582,13 @@ fn screencast_republishes_compositor_frames_through_real_pipewire() {
     let fake = Arc::new(FakeCompositor::default());
     let server = Server::start(&runtime_dir.join("tessera.sock"), Arc::clone(&fake))
         .expect("bind fake compositor IPC");
-    // The monitor|window SelectSources below gets a chooser with two
-    // options (desktop, window); the scripted prompter picks the desktop.
-    let prompter_dir = temp_dir("cast-prompter");
-    let prompter = common::fake_prompter(&prompter_dir);
-    common::write_prompter_response(
-        &prompter_dir,
-        1,
-        &atrium_portal_prompter::PrompterResponse::choose_source(
-            atrium_portal_prompter::ChooseSourceResponse::Selected {
-                source: "desktop".into(),
-                remember: false,
-            },
-        ),
-    );
+    // The monitor|window SelectSources below asks the compositor for a
+    // toplevel pick; the default answer is the whole desktop.
     let backend_log = runtime_dir.join("backend.log");
     let mut backend = daemon_command(&bus, &data_dir, &runtime_dir);
-    backend
-        .env("RUST_LOG", "debug")
-        .env("ATRIUM_PORTAL_PROMPTER", &prompter)
-        .env("ATRIUM_PROMPTER_FIXTURE", &prompter_dir)
-        .stderr(Stdio::from(
-            std::fs::File::create(&backend_log).expect("backend log"),
-        ));
+    backend.env("RUST_LOG", "debug").stderr(Stdio::from(
+        std::fs::File::create(&backend_log).expect("backend log"),
+    ));
     let _daemon = KillOnDrop(backend.spawn().expect("spawn portal daemon"));
     wait_for_name(&conn, PORTAL);
 
@@ -1257,6 +1257,51 @@ fn screencast_releases_a_superseded_pending_slot_frame() {
     assert!(!fixture.fake.releases.lock().unwrap().contains(&(1, 1)));
 }
 
+/// The prompt answers a test scripts into its fake compositor.
+///
+/// Since ADR-0026 every interactive surface except FileChooser is compositor
+/// chrome, so a cast test scripts the compositor rather than a prompter
+/// process. The lists are consumed by the fake in LIFO order (the fake pops),
+/// so a test that scripts two answers must push them in reverse call order.
+#[derive(Debug, Default)]
+struct Script {
+    targets: Vec<atrium_portal_ipc::PickResult>,
+    confirms: Vec<atrium_portal_ipc::ConfirmPickResult>,
+}
+
+impl Script {
+    /// Ask the fake to pick the output named `connector`.
+    fn output(connector: &str) -> Self {
+        Self {
+            targets: vec![atrium_portal_ipc::PickResult::Output {
+                connector: Some(connector.to_owned()),
+            }],
+            confirms: vec![atrium_portal_ipc::ConfirmPickResult::Confirmed],
+        }
+    }
+
+    /// Ask the fake to pick a toplevel window.
+    fn window(id: u64) -> Self {
+        Self {
+            targets: vec![atrium_portal_ipc::PickResult::Window {
+                id: atrium_portal_ipc::WindowId(id),
+            }],
+            confirms: vec![atrium_portal_ipc::ConfirmPickResult::Confirmed],
+        }
+    }
+
+    fn apply(&self, fake: &FakeCompositor) {
+        fake.target_answers
+            .lock()
+            .unwrap()
+            .extend(self.targets.iter().rev().cloned());
+        fake.consent_answers
+            .lock()
+            .unwrap()
+            .extend(self.confirms.iter().rev().cloned());
+    }
+}
+
 /// A running cast environment for the protocol-29 surface tests: private
 /// bus, isolated PipeWire stack, fake compositor, scripted one-shot
 /// prompter, and daemon. Guards drop in declaration order.
@@ -1266,7 +1311,6 @@ struct CastEnv {
     server: Server,
     runtime_dir: std::path::PathBuf,
     data_dir: std::path::PathBuf,
-    prompter_dir: std::path::PathBuf,
     _daemon: KillOnDrop,
     _stack: (KillOnDrop, KillOnDrop),
     _bus: common::PrivateBus,
@@ -1279,14 +1323,13 @@ impl Drop for CastEnv {
         }
         std::fs::remove_dir_all(&self.runtime_dir).ok();
         std::fs::remove_dir_all(&self.data_dir).ok();
-        std::fs::remove_dir_all(&self.prompter_dir).ok();
     }
 }
 
 fn cast_env(
     tag: &str,
     outputs: Vec<atrium_portal_ipc::OutputInfo>,
-    responses: &[atrium_portal_prompter::PrompterResponse],
+    script: &Script,
 ) -> Option<CastEnv> {
     let Some(bus) = private_bus() else {
         if pipewire_e2e_required() {
@@ -1309,20 +1352,12 @@ fn cast_env(
     *fake.outputs.lock().unwrap() = outputs;
     let server = Server::start(&runtime_dir.join("tessera.sock"), Arc::clone(&fake))
         .expect("bind fake compositor IPC");
-    let prompter_dir = temp_dir(&format!("cast-{tag}-prompter"));
-    let prompter = common::fake_prompter(&prompter_dir);
-    for (index, response) in responses.iter().enumerate() {
-        common::write_prompter_response(&prompter_dir, (index + 1) as u32, response);
-    }
+    script.apply(&fake);
     let backend_log = runtime_dir.join("backend.log");
     let mut backend = daemon_command(&bus, &data_dir, &runtime_dir);
-    backend
-        .env("RUST_LOG", "debug")
-        .env("ATRIUM_PORTAL_PROMPTER", &prompter)
-        .env("ATRIUM_PROMPTER_FIXTURE", &prompter_dir)
-        .stderr(Stdio::from(
-            std::fs::File::create(&backend_log).expect("backend log"),
-        ));
+    backend.env("RUST_LOG", "debug").stderr(Stdio::from(
+        std::fs::File::create(&backend_log).expect("backend log"),
+    ));
     let daemon = KillOnDrop(backend.spawn().expect("spawn portal daemon"));
     wait_for_name(&conn, PORTAL);
     Some(CastEnv {
@@ -1331,7 +1366,47 @@ fn cast_env(
         server,
         runtime_dir,
         data_dir,
-        prompter_dir,
+        _daemon: daemon,
+        _stack: stack,
+        _bus: bus,
+    })
+}
+
+fn headless_cast_env(tag: &str, outputs: Vec<atrium_portal_ipc::OutputInfo>) -> Option<CastEnv> {
+    let Some(bus) = private_bus() else {
+        if pipewire_e2e_required() {
+            panic!("dbus-daemon unavailable");
+        }
+        eprintln!("cast PipeWire E2E: no dbus-daemon, skipping");
+        return None;
+    };
+    let conn = bus.connect();
+    let data_dir = temp_dir(&format!("cast-{tag}-data"));
+    let runtime_dir = temp_dir(&format!("cast-{tag}-runtime"));
+    std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))
+        .expect("secure PipeWire runtime directory");
+    let Some(stack) = spawn_pipewire_stack(bus.address(), &runtime_dir) else {
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(runtime_dir).ok();
+        return None;
+    };
+    let fake = Arc::new(FakeCompositor::default());
+    *fake.outputs.lock().unwrap() = outputs;
+    let server = Server::start(&runtime_dir.join("tessera.sock"), Arc::clone(&fake))
+        .expect("bind fake compositor IPC");
+    let backend_log = runtime_dir.join("backend.log");
+    let mut backend = daemon_command(&bus, &data_dir, &runtime_dir);
+    backend.env("RUST_LOG", "debug").stderr(Stdio::from(
+        std::fs::File::create(&backend_log).expect("backend log"),
+    ));
+    let daemon = KillOnDrop(backend.spawn().expect("spawn portal daemon"));
+    wait_for_name(&conn, PORTAL);
+    Some(CastEnv {
+        conn,
+        fake,
+        server,
+        runtime_dir,
+        data_dir,
         _daemon: daemon,
         _stack: stack,
         _bus: bus,
@@ -1512,16 +1587,7 @@ fn wait_until(condition: impl Fn() -> bool, message: &str) {
 /// wire (protocol 29).
 #[test]
 fn screencast_selects_a_single_output_and_embeds_cursor() {
-    let Some(env) = cast_env(
-        "persel",
-        two_outputs(),
-        &[atrium_portal_prompter::PrompterResponse::choose_source(
-            atrium_portal_prompter::ChooseSourceResponse::Selected {
-                source: "output:DP-1".into(),
-                remember: false,
-            },
-        )],
-    ) else {
+    let Some(env) = cast_env("persel", two_outputs(), &Script::output("DP-1")) else {
         return;
     };
     let session_path = create_session(&env.conn, "persel");
@@ -1536,18 +1602,13 @@ fn screencast_selects_a_single_output_and_embeds_cursor() {
     );
     assert_eq!(code, 0);
 
-    // The chooser saw desktop + both connectors, and consent named DP-1.
-    let request = common::read_prompter_request(&env.prompter_dir, 1);
-    let atrium_portal_prompter::PromptRequest::ChooseSource(request) = request else {
-        panic!("expected a choose_source prompter request");
-    };
-    let ids: Vec<&str> = request
-        .options
-        .iter()
-        .map(|option| option.id.as_str())
-        .collect();
-    assert_eq!(ids, ["desktop", "output:HDMI-A-1", "output:DP-1"]);
-    assert!(!request.remember_offered);
+    // The compositor answered the output pick, and consent named DP-1.
+    let picks = env.fake.picks.lock().unwrap().clone();
+    assert_eq!(
+        picks,
+        [PickKind::Output],
+        "two outputs must trigger one output pick"
+    );
     let confirms = env.fake.confirms.lock().unwrap().clone();
     assert_eq!(confirms.len(), 1);
     assert!(
@@ -1578,16 +1639,7 @@ fn screencast_selects_a_single_output_and_embeds_cursor() {
 /// window.
 #[test]
 fn screencast_window_selection_streams_the_window() {
-    let Some(env) = cast_env(
-        "winsel",
-        Vec::new(),
-        &[atrium_portal_prompter::PrompterResponse::choose_source(
-            atrium_portal_prompter::ChooseSourceResponse::Selected {
-                source: "window".into(),
-                remember: false,
-            },
-        )],
-    ) else {
+    let Some(env) = cast_env("winsel", Vec::new(), &Script::window(7)) else {
         return;
     };
     let session_path = create_session(&env.conn, "winsel");
@@ -1625,21 +1677,98 @@ fn screencast_window_selection_streams_the_window() {
     );
 }
 
+/// Headless portal mode (ADR-0021): without an external prompter binary,
+/// SelectSources with monitor|window (like OBS Studio) delegates directly
+/// to the compositor's interactive Window pick and starts the stream cleanly.
+#[test]
+fn screencast_headless_window_selection_without_prompter() {
+    let Some(env) = headless_cast_env("hlwin", Vec::new()) else {
+        return;
+    };
+    let session_path = create_session(&env.conn, "hlwin");
+    let code = select_sources(
+        &env.conn,
+        &session_path,
+        "hlwin",
+        HashMap::from([("types".to_string(), Value::from(0b11_u32))]),
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        env.fake.picks.lock().unwrap().as_slice(),
+        &[PickKind::Window]
+    );
+    let confirms = env.fake.confirms.lock().unwrap().clone();
+    assert_eq!(confirms.len(), 1);
+    assert!(
+        confirms[0].1.contains("record the selected window"),
+        "consent names the window: {confirms:?}"
+    );
+
+    let (code, results) = start_session(&env.conn, &session_path, "hlwin");
+    assert_eq!(code, 0, "Start: {results:?}");
+    assert_eq!(stream_source_type(&results), 2);
+    assert_eq!(
+        env.fake.stream_starts.lock().unwrap().as_slice(),
+        &[(
+            Some(60),
+            StreamTarget::Window {
+                window: atrium_portal_ipc::WindowId(7)
+            },
+            Some(true),
+            Some(StreamCursorMode::Hidden)
+        )]
+    );
+}
+
+/// Headless portal mode (ADR-0021): clicking the empty desktop during a
+/// window pick yields Output with connector: None and records the entire desktop.
+#[test]
+fn screencast_headless_desktop_click_in_window_mode() {
+    let Some(env) = headless_cast_env("hldesk", Vec::new()) else {
+        return;
+    };
+    *env.fake.pick_response.lock().unwrap() = Some(PickResult::Output { connector: None });
+    let session_path = create_session(&env.conn, "hldesk");
+    let code = select_sources(
+        &env.conn,
+        &session_path,
+        "hldesk",
+        HashMap::from([("types".to_string(), Value::from(0b11_u32))]),
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        env.fake.picks.lock().unwrap().as_slice(),
+        &[PickKind::Window]
+    );
+    let confirms = env.fake.confirms.lock().unwrap().clone();
+    assert_eq!(confirms.len(), 1);
+    assert!(
+        confirms[0].1.contains("record the entire desktop"),
+        "consent names the entire desktop: {confirms:?}"
+    );
+
+    let (code, results) = start_session(&env.conn, &session_path, "hldesk");
+    assert_eq!(code, 0, "Start: {results:?}");
+    assert_eq!(stream_source_type(&results), 1);
+    assert_eq!(
+        env.fake.stream_starts.lock().unwrap().as_slice(),
+        &[(
+            Some(60),
+            StreamTarget::Output { output: None },
+            Some(true),
+            Some(StreamCursorMode::Hidden)
+        )]
+    );
+}
+
 /// persist_mode 1 with the remember tick issues a restore token; a later
 /// session presenting it restores the selection with no chooser and no
 /// compositor consent, and Start re-issues the same token.
 #[test]
 fn screencast_persist_restore_round_trip() {
-    let Some(env) = cast_env(
-        "persist",
-        two_outputs(),
-        &[atrium_portal_prompter::PrompterResponse::choose_source(
-            atrium_portal_prompter::ChooseSourceResponse::Selected {
-                source: "desktop".into(),
-                remember: true,
-            },
-        )],
-    ) else {
+    // With two outputs the compositor asks which one; answering "desktop"
+    // (no connector) is the whole-desktop selection, which is persistable.
+    let Some(env) = cast_env("persist", two_outputs(), &Script::default()) else {
         return;
     };
     let session_path = create_session(&env.conn, "persist1");
@@ -1679,9 +1808,10 @@ fn screencast_persist_restore_round_trip() {
         ]),
     );
     assert_eq!(code, 0);
-    assert!(
-        !env.prompter_dir.join("request-2.json").exists(),
-        "a restored selection must not open the chooser"
+    assert_eq!(
+        env.fake.picks.lock().unwrap().len(),
+        1,
+        "a restored selection must not open the target picker again"
     );
     assert_eq!(
         env.fake.confirms.lock().unwrap().len(),
@@ -1701,7 +1831,7 @@ fn screencast_persist_restore_round_trip() {
 /// to the new geometry.
 #[test]
 fn screencast_geometry_change_restarts_and_renegotiates() {
-    let Some(env) = cast_env("geom", Vec::new(), &[]) else {
+    let Some(env) = cast_env("geom", Vec::new(), &Script::default()) else {
         return;
     };
     *env.fake.stream_sizes.lock().unwrap() = vec![(2, 2), (4, 4)];
@@ -1781,7 +1911,7 @@ fn screencast_geometry_change_restarts_and_renegotiates() {
 /// the session closes instead of publishing mismatched frames.
 #[test]
 fn screencast_geometry_mismatch_fails_the_stream() {
-    let Some(env) = cast_env("geomx", Vec::new(), &[]) else {
+    let Some(env) = cast_env("geomx", Vec::new(), &Script::default()) else {
         return;
     };
     // The restart answers the OLD geometry (the sizes queue only covers
@@ -1825,7 +1955,7 @@ fn screencast_geometry_mismatch_fails_the_stream() {
 /// `SPA_META_VideoDamage` metadata on the published buffer.
 #[test]
 fn screencast_damage_reaches_the_consumer() {
-    let Some(env) = cast_env("damage", Vec::new(), &[]) else {
+    let Some(env) = cast_env("damage", Vec::new(), &Script::default()) else {
         return;
     };
     let session_path = create_session(&env.conn, "damage");
@@ -1947,7 +2077,7 @@ fn screencast_negotiates_multi_modifier_consumer_zero_copy() {
 /// without buffer starvation or stalls.
 #[test]
 fn screencast_continuous_cadence_and_pts_headers() {
-    let Some(env) = cast_env("cadence", Vec::new(), &[]) else {
+    let Some(env) = cast_env("cadence", Vec::new(), &Script::default()) else {
         return;
     };
     let session_path = create_session(&env.conn, "cadence");

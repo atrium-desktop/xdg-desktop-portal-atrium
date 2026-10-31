@@ -5,17 +5,16 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-use atrium_portal_prompter::{
+use atrium_arca_contract::{
     BytePath, Choice, FileChooserMode, FileChooserRequest, FileChooserResponse, FileFilter,
-    FilterRule, FilterRuleKind, PromptRequest, PrompterResponse,
+    FilterRule, FilterRuleKind,
 };
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
 mod common;
 use common::{
-    KillOnDrop, daemon_command, e2e_required, fake_prompter, private_bus, read_prompter_request,
-    temp_dir, wait_for_name, write_prompter_response,
+    KillOnDrop, daemon_command, e2e_required, fake_chooser, private_bus, temp_dir, wait_for_name,
 };
 
 const PORTAL: &str = "org.freedesktop.impl.portal.desktop.atrium";
@@ -53,15 +52,31 @@ fn result_uris(results: &HashMap<String, OwnedValue>) -> Vec<String> {
     Vec::<String>::try_from(Value::from(uris.clone())).expect("uris is a string array")
 }
 
+/// Write one scripted arca reply: the versioned envelope ADR-0027 defines.
 fn write_response(directory: &Path, index: u32, response: &FileChooserResponse) {
-    write_prompter_response(directory, index, &PrompterResponse::new(response.clone()));
+    let envelope = serde_json::json!({
+        "version": atrium_arca_contract::ARCA_CONTRACT_VERSION,
+        "response": response,
+    });
+    std::fs::write(
+        directory.join(format!("response-{index}.json")),
+        serde_json::to_vec(&envelope).expect("serialize the arca reply"),
+    )
+    .expect("write the arca reply");
 }
 
+/// Read and decode one request the fake chooser recorded.
 fn read_request(directory: &Path, index: u32) -> FileChooserRequest {
-    let PromptRequest::FileChooser(request) = read_prompter_request(directory, index) else {
-        panic!("FileChooser must issue a file chooser prompt");
-    };
-    request
+    let bytes = std::fs::read(directory.join(format!("request-{index}.json")))
+        .expect("read the recorded chooser request");
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("decode the chooser envelope");
+    assert_eq!(
+        envelope["version"],
+        atrium_arca_contract::ARCA_CONTRACT_VERSION,
+        "the chooser must speak the contract version"
+    );
+    serde_json::from_value(envelope["request"].clone()).expect("decode the chooser request")
 }
 
 #[test]
@@ -74,7 +89,7 @@ fn file_chooser_end_to_end() {
     let data_dir = temp_dir("data");
     let runtime_dir = temp_dir("runtime");
     let fixture_dir = temp_dir("prompter");
-    let prompter = fake_prompter(&fixture_dir);
+    let prompter = fake_chooser(&fixture_dir);
 
     let image_filter = FileFilter {
         label: "Images".into(),
@@ -134,7 +149,7 @@ fn file_chooser_end_to_end() {
 
     let mut command = daemon_command(&bus, &data_dir, &runtime_dir);
     command
-        .env("ATRIUM_PORTAL_PROMPTER", &prompter)
+        .env("ATRIUM_FILE_CHOOSER_PROMPTER", &prompter)
         .env("ATRIUM_PROMPTER_FIXTURE", &fixture_dir);
     let _daemon = KillOnDrop(command.spawn().expect("spawn portal daemon"));
 
@@ -361,7 +376,7 @@ fn public_frontend_routes_file_chooser_and_returns_response() {
     )
     .expect("stage frontend routing compatibility");
 
-    let prompter = fake_prompter(&fixture_dir);
+    let prompter = fake_chooser(&fixture_dir);
     write_response(
         &fixture_dir,
         1,
@@ -378,7 +393,7 @@ fn public_frontend_routes_file_chooser_and_returns_response() {
         .env("DBUS_SESSION_BUS_ADDRESS", bus.address())
         .env("XDG_DATA_HOME", &backend_data)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
-        .env("ATRIUM_PORTAL_PROMPTER", &prompter)
+        .env("ATRIUM_FILE_CHOOSER_PROMPTER", &prompter)
         .env("ATRIUM_PROMPTER_FIXTURE", &fixture_dir)
         .env("RUST_LOG", "debug")
         .stdout(std::process::Stdio::null())

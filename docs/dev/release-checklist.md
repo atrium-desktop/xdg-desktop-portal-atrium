@@ -13,7 +13,7 @@
    - `README.md` and `docs/reference/compatibility.md` protocol numbers ↔
      `atrium-portal-ipc`'s `PROTOCOL_VERSION`/`MIN_PROTOCOL_VERSION`,
    - `docs/dev/portal-ui-testing.md` payload versions ↔
-     `atrium-portal-prompter`'s `PROCESS_CONTRACT_VERSION`,
+     `atrium-arca-contract`'s `ARCA_CONTRACT_VERSION`,
    - `docs/dev/documentation/` is never modified by a code change
      (governance firewall, see `AGENTS.md`).
 

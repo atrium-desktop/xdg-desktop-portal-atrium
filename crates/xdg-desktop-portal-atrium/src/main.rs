@@ -15,11 +15,12 @@ fn main() -> ExitCode {
     // filter) warns and never aborts startup. The logger is not initialized
     // yet, so the warning goes to stderr directly — the early-error channel
     // this file already uses.
-    // SAFETY: setrlimit takes a valid pointer to an initialized rlimit.
     let no_core = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
     };
+    // SAFETY: `setrlimit` takes a valid pointer to an initialized `rlimit`
+    // (both limits zero) and only mutates this process's resource limits.
     if unsafe { libc::setrlimit(libc::RLIMIT_CORE, &no_core) } != 0 {
         let error = std::io::Error::last_os_error();
         eprintln!("xdg-desktop-portal-atrium: could not disable core dumps: {error}");
