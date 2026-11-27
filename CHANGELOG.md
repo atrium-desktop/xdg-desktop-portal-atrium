@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.0.39] - 2026-11-27
+
 ### Changed
 
 - **Companion runtime floor: arca `v0.2.18` and sigil `v1.4.3`.** The
@@ -1173,7 +1175,8 @@ All notable changes to this project are documented in this file.
 - Declared compatibility with Aegis `v0.0.9` through exact tagged Cargo
   dependencies.
 
-[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.38...HEAD
+[Unreleased]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.39...HEAD
+[0.0.39]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.38...v0.0.39
 [0.0.38]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.37...v0.0.38
 [0.0.37]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.36...v0.0.37
 [0.0.36]: https://github.com/atrium-desktop/xdg-desktop-portal-atrium/compare/v0.0.35...v0.0.36
