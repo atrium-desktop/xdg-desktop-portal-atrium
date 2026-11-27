@@ -15,6 +15,114 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Companion runtime floor: arca `v0.2.18` and sigil `v1.4.3`.** The
+  FileChooser and Secret contracts are aligned as a clean break
+  ([ADR-0030](docs/adr/0030-companion-contract-hardening-and-clean-break-alignment.md)).
+  An older arca speaks the retired v6 envelope, so every FileChooser
+  request fails with code 2. An older sigil answers a locked vault with
+  code 1 instead of prompting for unlock, and does not verify that the
+  caller is the portal. Upgrade them together with the portal.
+- **arca is spoken to exclusively over contract v1.** The flat
+  `{"version":1,"request":…}` / `{"version":1,"response":…}` envelopes are
+  the only accepted shape; a legacy v6 multi-prompt reply is rejected.
+  arca now owns `save_files` path synthesis and returns one final path per
+  suggested name, and the backend enforces that exact count.
+- **sigil's socket honors `SIGIL_SOCKET_PATH`.** The variable takes
+  precedence over `$XDG_RUNTIME_DIR/sigil/native.sock`, matching the sigil
+  daemon's own resolution; with neither set, retrieval fails closed. Both
+  must be absolute: a relative override is refused and a relative runtime
+  dir is ignored.
+- **A desynchronized vault answers `RetrieveSecret` with code 2.** sigil's
+  `STATUS_DESYNCED` is decoded and logged with `sigil recover` guidance
+  instead of surfacing as an unexpected response.
+- **sigil responses are decoded strictly.** Each status must carry exactly
+  its own payload shape. Padded empty-body statuses, an empty secret, an
+  access-denied or error status without its message, and trailing bytes
+  after a message all fail closed.
+- **The arca child receives `SIGTERM` before `SIGKILL`.** Termination
+  allows a 250 ms grace window, then escalates and reaps the child.
+
+### Fixed
+
+- **A failed ScreenCast no longer stalls every other ScreenCast request.**
+  The cast's PipeWire context loaded libpipewire's realtime module, which
+  asks RTKit or the frontend's Realtime portal for a priority with a
+  blocking D-Bus call on its own thread. Tearing the context down joins that
+  thread, so an unanswered call held the screencast worker — and every
+  queued `SelectSources`, `Start`, and session close behind it — for up to
+  the D-Bus timeout, and a cast that failed (for example on a mismatched
+  geometry restart) kept its compositor stream open for as long. The cast
+  context now sets `module.rt = false`; it republishes already-rendered
+  frames and gains nothing from realtime scheduling.
+- **A slow ScreenCast teardown no longer delays other sessions.** Closing a
+  session joined its cast thread on the screencast dispatcher, and that
+  teardown's compositor calls are bounded only by their 15-second timeout
+  each. Teardown now runs on its own thread; the dispatcher only detaches
+  the session, and `Closed` is still emitted once the cast has stopped,
+  including when a second close arrives while the first is in progress.
+- **A chooser that leaves a process holding its pipes no longer wedges
+  FileChooser.** After arca exits, its pipes get a two-second grace to reach
+  EOF; a lingering descendant fails the request with code 2 instead of
+  blocking the worker indefinitely.
+- **`Request.Close` now cancels a `RetrieveSecret` waiting on sigil.** The
+  sigil response is read in 50 ms slices that check for cancellation, so a
+  closed request answers 1 within one slice and closes the socket — sigil
+  sees EOF and abandons its unlock prompt — instead of holding a worker for
+  up to the 300-second liveness floor.
+- **A FileChooser request near the size cap is refused up front.** The
+  backend measured the bare request against the 1 MiB cap while arca
+  measures the complete stdin line, so a request within the envelope's
+  overhead of the cap passed validation and then failed inside arca. The
+  backend now measures the exact bytes it writes and answers such a request
+  with `InvalidArgs` before spawning arca.
+- **A FileChooser child that never reads its request no longer blocks
+  `Request.Close`.** The request is written on its own thread, so a child
+  stalled before reading `stdin` cannot wedge the cancellation poll.
+- **A malformed arca reply with non-ASCII output no longer panics the
+  FileChooser worker.** The stdout preview in the error message is cut on a
+  character boundary.
+
+### Removed
+
+- **`atrium_arca_contract::FileChooserRequest::finish_paths`.** Path
+  synthesis for `save_files` belongs to arca; consumers of the contract crate
+  must not re-derive final paths.
+- **The unused `serde` and `serde_json` dependencies of
+  `atrium-portal-secret`.**
+
+### Development
+
+- Every workspace crate inherits `[workspace.lints]`, so
+  `undocumented_unsafe_blocks` and `missing_debug_implementations` now
+  cover `atrium-portal-ipc`, `atrium-portal-request`, and
+  `atrium-portal-secret` as well.
+- Test temporary directories come from `tempfile`, created atomically with
+  private permissions, and are removed when the test process exits
+  (`ATRIUM_PORTAL_E2E_KEEP` keeps them). They previously leaked on every run.
+- The isolated PipeWire stack no longer touches the machine's hardware or the
+  user's session state. Its WirePlumber runs an `atrium-portal-test` profile
+  with audio, Bluetooth, and video-capture monitors disabled, and both daemons
+  get private config and state directories. Parallel test stacks probing the
+  real sound card could wedge the kernel driver and leave unkillable
+  WirePlumber processes until reboot; the `audio_stack_is_wedged` skip that
+  papered over this is gone.
+- The private test bus runs with a sandboxed home and runtime directory, so a
+  service it activates for the public-frontend tests never writes the user's
+  permission store or mounts over `$XDG_RUNTIME_DIR/doc`.
+- The public-frontend prerequisite probe reports the real reason. It treated
+  the bus's immediate `ServiceUnknown` reply for a made-up name as "no
+  activation helper", so those tests could never run anywhere. It now
+  activates `PermissionStore` and `Documents` themselves with a bounded wait.
+- The PipeWire media tests pass again; ten had failed since `v0.0.38`.
+  Their fixtures dropped the D-Bus connection that owns the ScreenCast
+  session, so the daemon correctly reclaimed it, and they kept the portal
+  frontend name while running an in-process PipeWire consumer, which
+  PipeWire's `module-portal` then treated as the portal itself. Fixtures now
+  keep the connection for the test's lifetime and release the frontend name
+  once the cast has started.
+
 ## [0.0.38] - 2026-10-31
 
 ### Security

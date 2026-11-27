@@ -30,6 +30,13 @@ test that needs to start an isolated PipeWire stack cannot, and it times out
 too. The suite degrades run by run until the machine is rebooted. This actually
 happened: 66 leaked buses and 48 wedged session managers.
 
+The isolated stack now runs WirePlumber under a dedicated `atrium-portal-test`
+profile with `hardware.audio`, `hardware.bluetooth`, and
+`hardware.video-capture` disabled, plus private config and state directories.
+It never opens a sound card, Bluetooth adapter, or camera, so neither a leaked
+nor a concurrent test stack can wedge the audio driver, and a driver wedged by
+something else cannot stall the suite.
+
 ## The rule
 
 Arm `PR_SET_PDEATHSIG` in the child, between `fork` and `exec`:
@@ -89,19 +96,22 @@ portal backend, `pipewire`, `wireplumber`, `gst-launch-1.0`, `arca`):
 ## Environment preconditions: skip, do not time out
 
 A test that cannot possibly pass must say so in milliseconds and name the
-reason. Two probes exist because one real timeout is worse than a thousand
+reason. The probe exists because one real timeout is worse than a thousand
 skips: it burns the whole budget and reports a failure that says nothing about
 the code.
 
 - `frontend_prerequisites(&bus)` — decides whether `xdg-desktop-portal` can
-  claim its bus name at all. A private `dbus-daemon` has no service-activation
-  helper, so the frontend blocks on `StartServiceByName` for
-  `PermissionStore` and `Documents` and then exits with "No document portal".
-  The probe asks the bus directly and bounds the wait at two seconds.
-- `audio_stack_is_wedged()` — scans `/proc` for a process in `D` state on an
-  `snd_*` channel. Such a process holds the audio device and cannot be killed.
+  claim its bus name at all. The frontend first activates `PermissionStore`
+  and `Documents`; a `dbus-daemon` built with
+  `--disable-traditional-activation` accepts those requests and never
+  answers, so the frontend waits out its timeout and exits with "No document
+  portal". The probe activates the same two services itself, bounded at five
+  seconds: an error reply means a service is not installed, no reply means
+  the bus cannot activate. The private bus runs with a sandboxed home and
+  runtime directory, so activated services never touch the user's real
+  permission store or `$XDG_RUNTIME_DIR/doc`.
 
-Both report a skip normally and a hard failure when
+It reports a skip normally and a hard failure when
 `ATRIUM_PORTAL_REQUIRE_E2E` / `ATRIUM_PORTAL_REQUIRE_PIPEWIRE_E2E` is set, so CI
 stays strict where the environment is controlled and local runs stay honest.
 

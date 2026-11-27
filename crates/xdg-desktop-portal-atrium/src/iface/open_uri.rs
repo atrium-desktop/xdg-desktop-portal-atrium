@@ -6,7 +6,7 @@
 //! databases ([`crate::apps`]); every other well-formed scheme maps to
 //! `x-scheme-handler/<scheme>`. With `ask=false` (the default) a configured
 //! default application launches directly; otherwise the same one-shot
-//! `ChooseApp` prompter dialog AppChooser uses offers every registered
+//! compositor PickApp chrome AppChooser uses offers every registered
 //! application, with the backend's "Remember this choice" checkbox
 //! recording the selection as the content type's default. Answering 0
 //! means launched, 1 means the user cancelled the chooser, 2 means the

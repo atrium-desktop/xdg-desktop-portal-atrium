@@ -73,6 +73,8 @@ pub fn die_with_parent(command: &mut Command) {
 pub struct PrivateBus {
     address: String,
     child: Child,
+    /// The sandbox home and runtime directory activated services inherit.
+    sandbox: PathBuf,
 }
 
 impl PrivateBus {
@@ -92,14 +94,72 @@ impl Drop for PrivateBus {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // An activated `xdg-document-portal` mounts its FUSE tree at
+        // `$XDG_RUNTIME_DIR/doc`. It normally unmounts when the bus goes
+        // away; if it died first, the stale mount would make the sandbox
+        // undeletable, so detach it lazily.
+        let doc = self.sandbox.join("runtime/doc");
+        if is_mount_point(&doc) {
+            for tool in ["fusermount3", "fusermount"] {
+                let unmounted = Command::new(tool)
+                    .arg("-u")
+                    .arg("-z")
+                    .arg(&doc)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|status| status.success());
+                if unmounted {
+                    break;
+                }
+            }
+        }
     }
+}
+
+/// Whether `path` is a mount point of this process's mount namespace.
+fn is_mount_point(path: &Path) -> bool {
+    let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") else {
+        return false;
+    };
+    let target = path.to_string_lossy();
+    // Field 5 is the mount point; spaces in it are octal-escaped.
+    mountinfo.lines().any(|line| {
+        line.split(' ')
+            .nth(4)
+            .is_some_and(|mount| mount.replace("\\040", " ") == target)
+    })
 }
 
 /// Spawn a private `dbus-daemon --session`; `None` when dbus-daemon is not
 /// installed (tests skip).
+///
+/// The bus passes its own environment to every service it activates, so it
+/// runs with a private home and runtime directory: an activated
+/// `xdg-permission-store` or `xdg-document-portal` must write its database and
+/// mount its FUSE tree inside the test's sandbox, never into the user's real
+/// `~/.local/share` or `$XDG_RUNTIME_DIR/doc`. `XDG_DATA_DIRS` and `PATH` are
+/// inherited so the system's `.service` files and binaries stay reachable.
 pub fn private_bus() -> Option<PrivateBus> {
+    let root = temp_dir("bus");
     let mut command = Command::new("dbus-daemon");
+    for (key, sub) in [
+        ("HOME", "home"),
+        ("XDG_RUNTIME_DIR", "runtime"),
+        ("XDG_DATA_HOME", "home/.local/share"),
+        ("XDG_CONFIG_HOME", "home/.config"),
+        ("XDG_CACHE_HOME", "home/.cache"),
+        ("XDG_STATE_HOME", "home/.local/state"),
+    ] {
+        let dir = root.join(sub);
+        std::fs::create_dir_all(&dir).expect("create private bus sandbox dir");
+        command.env(key, dir);
+    }
+    std::fs::set_permissions(root.join("runtime"), std::fs::Permissions::from_mode(0o700))
+        .expect("make private bus runtime dir private");
     command
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
         .args(["--session", "--nofork", "--print-address=1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -126,7 +186,11 @@ pub fn private_bus() -> Option<PrivateBus> {
         let _ = child.wait();
         return unavailable("dbus-daemon returned an empty address");
     }
-    Some(PrivateBus { address, child })
+    Some(PrivateBus {
+        address,
+        child,
+        sandbox: root,
+    })
 }
 
 /// Spawn the portal daemon bound to the private bus and hermetic XDG dirs.
@@ -198,6 +262,35 @@ pub fn claim_frontend(conn: &zbus::Connection) {
     await_admission(conn);
 }
 
+/// Stop impersonating the portal frontend while keeping `conn` on the bus.
+///
+/// PipeWire's `module-portal` resolves the owner of
+/// `org.freedesktop.portal.Desktop` to a PID and applies portal access rules
+/// to every PipeWire client from that process. In production the frontend
+/// and the application consuming a ScreenCast stream are different
+/// processes; a test that also runs an in-process PipeWire consumer must
+/// therefore drop the name before the consumer connects, or the session
+/// manager never links it. Sessions survive: the backend reclaims them only
+/// when their owner's unique name leaves the bus, and `conn` stays.
+pub fn release_frontend(conn: &zbus::Connection) {
+    let reply: Result<u32, zbus::Error> = bus::try_call::<_, u32>(
+        &bus::proxy(
+            conn,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        ),
+        "ReleaseName",
+        &("org.freedesktop.portal.Desktop",),
+    );
+    // 1 = released.
+    let code = reply.expect("release the portal frontend name");
+    assert_eq!(
+        code, 1,
+        "the fixture did not own the frontend name (ReleaseName returned {code})"
+    );
+}
+
 /// Wait until the backend actually admits this connection.
 ///
 /// The daemon learns the new owner from `NameOwnerChanged`, delivered
@@ -249,18 +342,55 @@ impl Drop for KillOnDrop {
     }
 }
 
-/// A unique temp directory tagged by test name and pid.
+/// Directories created by [`temp_dir`] in this test process, removed by
+/// [`remove_temp_dirs`] when the process exits.
+static TEMP_DIRS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// A unique, private temp directory tagged by test name.
+///
+/// `tempfile` creates the directory atomically with an unpredictable name and
+/// mode 0700. It is not tied to a guard's scope: the daemon under test may
+/// still hold files in it while the test's locals drop. Instead the directory
+/// is removed when the test process exits — normally or after a failed
+/// assertion, since nextest runs each test in its own process — unless
+/// `ATRIUM_PORTAL_E2E_KEEP` is set to leave the logs of a failed run
+/// inspectable.
 pub fn temp_dir(tag: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!(
-        "xdg-desktop-portal-atrium-e2e-{tag}-{}-{nanos}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        // SAFETY: `atexit` only requires a valid function pointer with static
+        // lifetime. `remove_temp_dirs` is a plain `extern "C" fn()`; a panic
+        // inside it aborts instead of unwinding across the C boundary.
+        let registered = unsafe { libc::atexit(remove_temp_dirs) };
+        assert_eq!(registered, 0, "register temp-dir cleanup");
+    });
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("xdg-desktop-portal-atrium-e2e-{tag}-"))
+        .tempdir()
+        .expect("create temp dir")
+        .keep();
+    TEMP_DIRS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(dir.clone());
     dir
+}
+
+extern "C" fn remove_temp_dirs() {
+    if std::env::var_os("ATRIUM_PORTAL_E2E_KEEP").is_some() {
+        return;
+    }
+    // `try_lock`: a thread still holding the lock at exit must not deadlock
+    // the process on its way out; leaking one run's directories is the lesser
+    // failure.
+    let dirs = match TEMP_DIRS.try_lock() {
+        Ok(dirs) => dirs,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return,
+    };
+    for dir in dirs.iter() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 /// Create a pipe-compatible, one-shot chooser fixture (`arca
@@ -327,53 +457,53 @@ fn document_portal_binary() -> Option<&'static std::path::Path> {
 ///
 /// The frontend claims `org.freedesktop.portal.Desktop` only after
 /// `StartServiceByName` succeeds for `org.freedesktop.impl.portal.PermissionStore`
-/// and `org.freedesktop.portal.Documents`. A private `dbus-daemon` without a
-/// systemd session manager has no activation helper, so those calls are
-/// accepted and never answered: the frontend sits for its 25 s timeout and
-/// then aborts with "No document portal".
+/// and `org.freedesktop.portal.Documents`. On a bus that cannot activate them
+/// — no `.service` file, or an activation request that is accepted and never
+/// answered — the frontend sits for its 25 s timeout and then aborts with
+/// "No document portal".
 ///
-/// The decisive question is therefore not "is systemd installed" but "did the
-/// bus answer an activation request". This probes the bus directly, in
-/// milliseconds, so callers can skip with a truthful reason.
-pub fn frontend_prerequisites(bus: &PrivateBus) -> Result<(), &'static str> {
+/// This asks the bus to activate exactly those two services, bounded, so
+/// callers can skip with a truthful reason in seconds instead of timing out.
+/// Any error *reply* is a definite answer (the service is not installed);
+/// only the absence of a reply means the bus cannot activate at all.
+pub fn frontend_prerequisites(bus: &PrivateBus) -> Result<(), String> {
+    const ACTIVATION_BOUND: Duration = Duration::from_secs(5);
+
     if frontend_binary().is_none() {
-        return Err("xdg-desktop-portal frontend is not installed");
+        return Err("xdg-desktop-portal frontend is not installed".into());
     }
     if document_portal_binary().is_none() {
-        return Err("xdg-document-portal is not installed");
+        return Err("xdg-document-portal is not installed".into());
     }
     let conn = bus.connect();
-    let fdo = bus::proxy(
-        &conn,
-        "org.freedesktop.DBus",
-        "/org/freedesktop/DBus",
-        "org.freedesktop.DBus",
-    );
-    // A service that never answers distinguishes an inert bus from a live one.
-    // An activation request for a name nobody serves returns promptly on a bus
-    // with an activation helper, and hangs without one, so bound it.
-    let activated: Result<(u32,), _> = {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            match bus::try_call(
-                &fdo,
-                "StartServiceByName",
-                &("org.freedesktop.portal.ProbeNobodyServes", 0u32),
-            ) {
-                Ok(reply) => break Ok(reply),
-                Err(_) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(error) => break Err(error),
+    for service in [
+        "org.freedesktop.impl.portal.PermissionStore",
+        "org.freedesktop.portal.Documents",
+    ] {
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        let probe_conn = conn.clone();
+        std::thread::spawn(move || {
+            let fdo = bus::proxy(
+                &probe_conn,
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+            );
+            let reply: zbus::Result<(u32,)> =
+                bus::try_call(&fdo, "StartServiceByName", &(service, 0u32));
+            let _ = reply_tx.send(reply.map(|_| ()).map_err(|error| error.to_string()));
+        });
+        match reply_rx.recv_timeout(ACTIVATION_BOUND) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(format!("the bus cannot activate {service}: {error}")),
+            Err(_) => {
+                return Err(format!(
+                    "the session bus never answered activation of {service}"
+                ));
             }
         }
-    };
-    match activated {
-        // `2` means "already running", which is impossible here; anything the
-        // bus answers at all proves an activation helper exists.
-        Ok((_,)) => Ok(()),
-        Err(_) => Err("the session bus has no service-activation helper"),
     }
+    Ok(())
 }
 
 /// Wait up to `bound` for `name`; returns whether it appeared.
@@ -468,13 +598,14 @@ pub fn read_all_with_timeout(mut file: std::fs::File, timeout: Duration) -> Vec<
 
 /// A Portal-owned stand-in for the sigil daemon's native IPC socket.
 ///
-/// The wire format mirrors sigil's protocol literally — a u32 big-endian
-/// length prefix followed by JSON, with externally tagged request and
-/// response enums — defined here as local fixtures rather than imported
-/// from the sigil workspace. A shared implementation could make a matching
-/// protocol bug pass on both sides; these literals cannot.
+/// The wire format mirrors `sigil-wire-v2` literally — an 8-byte binary header
+/// (`b"SIGL"`, version `2`, opcode/status byte, `u16_be` payload length) with
+/// length-prefixed UTF-8 TLV fields — defined here as local fixtures rather
+/// than imported from the sigil workspace. A shared implementation could make a
+/// matching protocol bug pass on both sides; these literals cannot.
 pub struct FakeSigil {
-    runtime_dir: PathBuf,
+    socket_path: PathBuf,
+    cleanup_dir: Option<PathBuf>,
     listener: Option<std::os::unix::net::UnixListener>,
     observed: std::sync::Arc<std::sync::Mutex<Vec<ObservedSecretRequest>>>,
     /// Set when the listener could not be created (e.g. a leftover socket).
@@ -493,6 +624,7 @@ pub struct ObservedSecretRequest {
 pub enum FakeSigilResponse {
     Secret(Vec<u8>),
     Locked,
+    Desynced,
     Cancelled,
     Error(String),
     /// Read the request, then hold the connection open without ever
@@ -512,6 +644,22 @@ impl FakeSigil {
         std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
             .expect("make sigil runtime dir private");
         let socket_path = socket_dir.join("native.sock");
+        Self::bind_internal(socket_path, Some(socket_dir), response)
+    }
+
+    /// Bind at an explicit custom socket path (for testing `SIGIL_SOCKET_PATH`).
+    pub fn bind_at(socket_path: &Path, response: FakeSigilResponse) -> Self {
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create custom sigil socket dir");
+        }
+        Self::bind_internal(socket_path.to_path_buf(), None, response)
+    }
+
+    fn bind_internal(
+        socket_path: PathBuf,
+        cleanup_dir: Option<PathBuf>,
+        response: FakeSigilResponse,
+    ) -> Self {
         let (listener, bind_error) = match std::os::unix::net::UnixListener::bind(&socket_path) {
             Ok(listener) => (Some(listener), None),
             Err(error) => (None, Some(error.to_string())),
@@ -523,7 +671,8 @@ impl FakeSigil {
             std::thread::spawn(move || serve(listener, observed, response));
         }
         Self {
-            runtime_dir: runtime_dir.to_path_buf(),
+            socket_path,
+            cleanup_dir,
             listener,
             observed,
             bind_error,
@@ -543,7 +692,10 @@ impl FakeSigil {
 impl Drop for FakeSigil {
     fn drop(&mut self) {
         drop(self.listener.take());
-        let _ = std::fs::remove_dir_all(self.runtime_dir.join("sigil"));
+        let _ = std::fs::remove_file(&self.socket_path);
+        if let Some(dir) = &self.cleanup_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
 
@@ -557,6 +709,7 @@ fn serve(
     const OP_GET_APPLICATION_SECRET: u8 = 0x01;
     const STATUS_SECRET: u8 = 0x01;
     const STATUS_LOCKED: u8 = 0x03;
+    const STATUS_DESYNCED: u8 = 0x04;
     const STATUS_CANCELLED: u8 = 0x05;
     const STATUS_ERROR: u8 = 0x07;
 
@@ -624,6 +777,7 @@ fn serve(
             }
             FakeSigilResponse::Secret(bytes) => (STATUS_SECRET, bytes.clone()),
             FakeSigilResponse::Locked => (STATUS_LOCKED, Vec::new()),
+            FakeSigilResponse::Desynced => (STATUS_DESYNCED, Vec::new()),
             FakeSigilResponse::Cancelled => (STATUS_CANCELLED, Vec::new()),
             FakeSigilResponse::Error(msg) => {
                 let mut b = Vec::new();

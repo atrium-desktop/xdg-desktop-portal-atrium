@@ -165,8 +165,8 @@ impl AppChooserIface {
         .await
     }
 
-    /// The frontend's mid-dialog choice updates. The one-shot prompter
-    /// cannot re-render, so the update is validated, logged, and
+    /// The frontend's mid-dialog choice updates. The compositor's one-shot
+    /// PickApp chrome cannot re-render, so the update is validated, logged, and
     /// acknowledged; see the module docs.
     async fn update_choices(
         &self,
@@ -191,7 +191,7 @@ impl AppChooserIface {
             ));
         }
         log::info!(
-            "portal: UpdateChoices for {} ({} choice(s)) is not rendered by the one-shot prompter",
+            "portal: UpdateChoices for {} ({} choice(s)) is not rendered by the one-shot PickApp chrome",
             handle.as_str(),
             choices.len()
         );
@@ -204,7 +204,7 @@ impl AppChooserIface {
     }
 }
 
-/// Resolve the portal arguments into the prompter's request: real desktop
+/// Resolve the portal arguments into the PickApp request: real desktop
 /// entries, the preferred candidate first, and the embedded choices
 /// (including the backend's own remember checkbox).
 fn build_request(

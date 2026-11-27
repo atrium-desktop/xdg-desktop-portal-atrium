@@ -8,8 +8,8 @@ dependency.
 
 | Portal line | Tessera runtime | IPC protocol | Tessera build dependency |
 |-------------|---------------|--------------|------------------------|
-| `v0.0.33` | `v0.0.78+` (32); `v0.0.16`–`v0.0.21` (29); `v0.0.15` (25); `v0.0.11`–`v0.0.14` (24) | 32, negotiates down to 24 | None |
-| `v0.0.11`–`v0.0.18` | `v0.0.16`–`v0.0.21` (29); `v0.0.15` (25); `v0.0.11`–`v0.0.14` (24) | 29, negotiates down to 24 | None |
+| `v0.0.33`+ | `v0.0.78+` (32); `v0.0.16`–`v0.0.21` (29); `v0.0.15` (25); `v0.0.11`–`v0.0.14` (24) | 32, negotiates down to 24 | None |
+| `v0.0.11`–`v0.0.32` | `v0.0.16`–`v0.0.21` (29); `v0.0.15` (25); `v0.0.11`–`v0.0.14` (24) | 29, negotiates down to 24 | None |
 | `v0.0.10` | `v0.0.16`–`v0.0.21` (27); `v0.0.15` (25); `v0.0.11`–`v0.0.14` (24) | 25, negotiates down to 24 | None |
 | `v0.0.9` | `v0.0.16`–`v0.0.18` (27); `v0.0.15` (25); `v0.0.11`–`v0.0.12` (24) | 25, negotiates down to 24 | None |
 | `v0.0.8` | `v0.0.16`–`v0.0.18` (27); `v0.0.15` (25); `v0.0.11`–`v0.0.12` (24) | 25, negotiates down to 24 | None |
@@ -49,7 +49,24 @@ projection's floor — so it works against every listed Tessera release (see
 [ADR-0011](../adr/0011-wallpaper-wire-reconciliation.md)). A future Tessera
 release is compatible when it preserves protocol 24.
 
-Only Settings, Screenshot, ScreenCast, and Wallpaper require compositor
-IPC; every other served interface is Portal-owned. FileChooser, Account
-confirmation, and Secret password input use the
-versioned one-shot Portal prompter contract.
+Only Settings, Screenshot, ScreenCast, Wallpaper, consent (`PickConfirm`),
+application choice (`PickApp`), and notifications (`Notify`) require compositor
+IPC (see [ADR-0026](../adr/0026-prompter-process-retirement.md)). The two other
+companion integrations are runtime-only wire contracts with no build-time
+dependency:
+
+| Companion | Interface | Wire contract | Discovery / Endpoint |
+|---|---|---|---|
+| **Arca** | `FileChooser` | `arca --chooser-prompt` JSON stdio, `ARCA_CONTRACT_VERSION = 1` ([ADR-0027](../adr/0027-arca-chooser-contract-crate.md)) | `$ATRIUM_FILE_CHOOSER_PROMPTER`, sibling `arca`, `PATH`, `/usr/local/bin/arca`, `/usr/bin/arca` |
+| **Sigil** | `Secret` | `sigil-wire-v2` 8-byte binary framing (`b"SIGL"`, v2, max 4096 B payload; [ADR-0020](../adr/0020-secret-vault-delegation-to-sigil.md), [ADR-0023](../adr/0023-sigil-wire-v2-binary-protocol-and-zero-allocation-hardening.md)) | `$SIGIL_SOCKET_PATH`, or `$XDG_RUNTIME_DIR/sigil/native.sock`; both must be absolute |
+
+Minimum companion releases for the Unreleased Portal line
+([ADR-0030](../adr/0030-companion-contract-hardening-and-clean-break-alignment.md)).
+An older arca speaks the retired v6 envelope and every FileChooser
+request fails; an older sigil does not prompt for unlock or verify the
+portal peer:
+
+| Companion | Minimum | Required for |
+|---|---|---|
+| Arca | `v0.2.18` | Contract v1 envelopes, empty `Choice.selected`, Arca-side `save_files` paths |
+| Sigil | `v1.4.3` | Interactive unlock on `GetApplicationSecret`, portal peer verification, `STATUS_DESYNCED` |

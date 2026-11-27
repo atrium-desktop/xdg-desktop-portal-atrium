@@ -41,6 +41,7 @@ pipewire = { version = "0.10", features = ["v0_3_34"] }
 atrium-portal-ipc = { workspace = true, features = ["test-server"] }
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -357,37 +357,32 @@ fn require_or_skip(condition: bool, message: &str) -> bool {
     false
 }
 
-/// Whether this machine can host an isolated PipeWire stack right now.
+/// The WirePlumber profile the isolated stack runs (see
+/// [`write_test_wireplumber_profile`]).
+const TEST_WIREPLUMBER_PROFILE: &str = "atrium-portal-test";
+
+/// Install a WirePlumber profile that keeps the test session manager off the
+/// machine's hardware.
 ///
-/// A `wireplumber` stuck in uninterruptible sleep (`D`) on the ALSA probe
-/// (`snd_pcm_substream_proc_status_read`) cannot be killed and holds the audio
-/// device; every later PipeWire test then blocks until its timeout. That is a
-/// machine condition, not a code defect, so report it as a skip with the
-/// reason instead of spending the per-test timeout.
-fn audio_stack_is_wedged() -> bool {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(pid) = name.to_str().and_then(|n| n.parse::<u32>().ok()) else {
-            continue;
-        };
-        let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
-            continue;
-        };
-        let is_stuck = status.lines().any(|line| line == "State:\tD (disk sleep)");
-        if !is_stuck {
-            continue;
-        }
-        let Ok(wchan) = std::fs::read_to_string(format!("/proc/{pid}/wchan")) else {
-            continue;
-        };
-        if wchan.contains("snd_pcm") || wchan.contains("snd_") {
-            return true;
-        }
-    }
-    false
+/// The default profile enumerates every ALSA card, Bluetooth adapter, and
+/// camera. A test stack has no use for any of them, and probing real sound
+/// hardware from several parallel test stacks can wedge the kernel driver,
+/// leaving unkillable `D`-state WirePlumber processes that break audio until
+/// reboot. Only linking policy is needed to connect a screencast producer to
+/// its consumer; `mixin.stateless` additionally stops WirePlumber persisting
+/// stream and default-node state.
+fn write_test_wireplumber_profile(config_home: &std::path::Path) {
+    let dropin_dir = config_home.join("wireplumber/wireplumber.conf.d");
+    std::fs::create_dir_all(&dropin_dir).expect("create WirePlumber drop-in dir");
+    std::fs::write(
+        dropin_dir.join("90-atrium-portal-test.conf"),
+        format!(
+            "wireplumber.profiles = {{\n  {TEST_WIREPLUMBER_PROFILE} = {{\n    \
+             inherits = [ main, mixin.stateless ]\n    hardware.audio = disabled\n    \
+             hardware.bluetooth = disabled\n    hardware.video-capture = disabled\n  }}\n}}\n"
+        ),
+    )
+    .expect("write WirePlumber test profile");
 }
 
 /// Spawn the isolated PipeWire daemon and WirePlumber session manager that
@@ -406,19 +401,23 @@ fn spawn_pipewire_stack(
     ) || !require_or_skip(
         media_tool_available("wireplumber"),
         "WirePlumber session manager unavailable",
-    ) || !require_or_skip(
-        !audio_stack_is_wedged(),
-        "a WirePlumber process is stuck in uninterruptible audio I/O; \
-         the machine cannot host an isolated PipeWire stack until it reboots",
     ) {
         return None;
     }
+    // Config and state stay inside the sandbox: neither daemon may read the
+    // user's drop-ins or write the user's session state.
+    let sandbox_config = runtime_dir.join("config");
+    let sandbox_state = runtime_dir.join("state");
+    write_test_wireplumber_profile(&sandbox_config);
+    std::fs::create_dir_all(&sandbox_state).expect("create sandbox state dir");
     let pipewire_log = runtime_dir.join("pipewire.log");
     let mut pipewire = Command::new("pipewire");
     pipewire
         .env("DBUS_SESSION_BUS_ADDRESS", bus_address)
         .env("XDG_RUNTIME_DIR", runtime_dir)
         .env("PIPEWIRE_RUNTIME_DIR", runtime_dir)
+        .env("XDG_CONFIG_HOME", &sandbox_config)
+        .env("XDG_STATE_HOME", &sandbox_state)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(
@@ -426,8 +425,7 @@ fn spawn_pipewire_stack(
         ));
     // The stack is killed by `Drop`, but a test killed for exceeding its
     // timeout never runs `Drop`; the kernel's parent-death signal is the only
-    // teardown that survives that. A leaked WirePlumber blocks forever in the
-    // ALSA probe and degrades every later PipeWire test on the machine.
+    // teardown that survives that.
     common::die_with_parent(&mut pipewire);
     let mut pipewire = pipewire.spawn().expect("pipewire was probed above");
     let socket = runtime_dir.join("pipewire-0");
@@ -463,9 +461,12 @@ fn spawn_pipewire_stack(
     let wireplumber_log = runtime_dir.join("wireplumber.log");
     let mut wireplumber = Command::new("wireplumber");
     wireplumber
+        .args(["--profile", TEST_WIREPLUMBER_PROFILE])
         .env("DBUS_SESSION_BUS_ADDRESS", bus_address)
         .env("XDG_RUNTIME_DIR", runtime_dir)
         .env("PIPEWIRE_RUNTIME_DIR", runtime_dir)
+        .env("XDG_CONFIG_HOME", &sandbox_config)
+        .env("XDG_STATE_HOME", &sandbox_state)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(
@@ -821,6 +822,10 @@ struct DmabufCastFixture {
     runtime_dir: std::path::PathBuf,
     data_dir: std::path::PathBuf,
     node_id: u32,
+    /// The frontend connection that owns the session. The daemon reclaims a
+    /// session whose owner leaves the bus, so dropping this before the test
+    /// ends tears the cast down and removes the PipeWire node mid-test.
+    _frontend: zbus::Connection,
     _daemon: KillOnDrop,
     _stack: (KillOnDrop, KillOnDrop),
     _bus: common::PrivateBus,
@@ -926,6 +931,9 @@ fn dmabuf_cast_fixture(
     common::claim_frontend(&conn);
     let session_path = format!("/org/freedesktop/portal/desktop/session/1/{tag}");
     let (node_id, _) = start_cast_session(&conn, &session_path, tag);
+    // The in-process PipeWire consumer must not share a PID with the
+    // frontend name's owner (see `release_frontend`).
+    common::release_frontend(&conn);
     assert_eq!(
         fake.stream_starts.lock().unwrap().as_slice(),
         &[(
@@ -941,6 +949,7 @@ fn dmabuf_cast_fixture(
         runtime_dir,
         data_dir,
         node_id,
+        _frontend: conn,
         _daemon: daemon,
         _stack: stack,
         _bus: bus,
@@ -1873,6 +1882,9 @@ fn screencast_geometry_change_restarts_and_renegotiates() {
     let (code, results) = start_session(&env.conn, &session_path, "geom");
     assert_eq!(code, 0, "Start: {results:?}");
     let (node_id, _) = stream_details(&results);
+    // The in-process consumer below must not share a PID with the
+    // frontend name's owner (see `common::release_frontend`).
+    common::release_frontend(&env.conn);
 
     assert!(env.server.push_stream_geometry_changed(1, 4, 4));
     wait_until(
@@ -1996,6 +2008,9 @@ fn screencast_damage_reaches_the_consumer() {
     let (code, results) = start_session(&env.conn, &session_path, "damage");
     assert_eq!(code, 0, "Start: {results:?}");
     let (node_id, _) = stream_details(&results);
+    // The in-process consumer below must not share a PID with the
+    // frontend name's owner (see `common::release_frontend`).
+    common::release_frontend(&env.conn);
 
     let socket = env.runtime_dir.join("pipewire-0");
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
@@ -2118,6 +2133,9 @@ fn screencast_continuous_cadence_and_pts_headers() {
     let (code, results) = start_session(&env.conn, &session_path, "cadence");
     assert_eq!(code, 0, "Start: {results:?}");
     let (node_id, _) = stream_details(&results);
+    // The in-process consumer below must not share a PID with the
+    // frontend name's owner (see `common::release_frontend`).
+    common::release_frontend(&env.conn);
 
     let socket = env.runtime_dir.join("pipewire-0");
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();

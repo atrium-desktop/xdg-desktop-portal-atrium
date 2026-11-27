@@ -28,7 +28,7 @@ pub type ResponseSender = async_channel::Sender<PortalResponse>;
 
 /// Cancellation state shared between every served `Request` object and the
 /// capture worker.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct RequestTracker {
     /// Request paths currently served (between `register` and `finish`).
     /// The membership test is what makes a late `Close` harmless: the
@@ -259,7 +259,7 @@ mod tests {
         // only async-signal-safe functions, as `pre_exec` requires.
         unsafe {
             command.pre_exec(|| {
-                if libc::prctl(libc::PR_SET_PDEATHSIG) != 0 {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 if libc::getppid() == 1 {

@@ -4,7 +4,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::io::{self, Read, Write};
 use zeroize::Zeroize as _;
 
-pub const MAX_FRAME: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_FRAME: usize = 16 * 1024 * 1024;
 
 pub(crate) fn write_msg<W: Write, T: Serialize>(writer: &mut W, message: &T) -> io::Result<()> {
     let mut bytes = serde_json::to_vec(message).map_err(json_error)?;

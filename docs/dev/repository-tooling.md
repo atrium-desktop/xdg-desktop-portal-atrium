@@ -1,8 +1,8 @@
 # Repository Tooling
 
 This page covers the repository's local tooling: the Git hooks, the
-helper scripts in `scripts/`, the Rust toolchain pin, and the prompter's
-linker fixup. For build and test commands see the
+helper scripts in `scripts/`, the Rust toolchain pin, and the native
+dependency boundary. For build and test commands see the
 [project README](../../README.md); for CI gates see the
 [Release Checklist](release-checklist.md).
 
@@ -38,7 +38,7 @@ the minimum supported toolchain really runs there.
 ## `scripts/install.sh`
 
 Builds the release artifacts with Cargo and installs the full backend
-surface: the two private executables, the generated D-Bus service file
+surface: the private daemon executable, the generated D-Bus service file
 (with `@libexecdir@` substituted to the final path, ignoring `DESTDIR`),
 and the portal metadata:
 
@@ -51,34 +51,21 @@ Honors `DESTDIR` for staged distribution packaging; `--no-build` installs
 from the existing `target/release` artifacts. Run it directly or from a
 package recipe — there is no configure step to cache.
 
-## `scripts/optics-release-ref.sh`
-
-Extracts the single shared optics release tag from `Cargo.toml`:
-
-```bash
-scripts/optics-release-ref.sh        # prints the tag, e.g. v0.0.14
-```
-
-The script hard-fails unless exactly five tagged `ming2k/optics`
-dependencies (`iris`, `lens`, `flux-sys`, `iris-sys`, `lens-sys`) share
-one tag. CI uses it to check out the matching optics release. Promoting an
-optics release is the manual inverse: bump every tagged dependency in
-`Cargo.toml` together, regenerate the canonical lockfile, and keep the
-script's expected package count in sync if a sixth optics crate is ever
-added.
-
 ## Native Dependency Boundary
 
-ADR-0025 concentrates every native-library dependency and every `unsafe`
-block in `crates/atrium-portal-cast` (the `pipewire` binding and `libc`).
-Nothing else in the workspace links them, so:
+ADR-0025 concentrates the native-library dependency — the `pipewire`
+binding — in `crates/atrium-portal-cast`. Nothing else in the workspace links
+it, so:
 
 - interface work, unit tests, and `atrium-portal-ipc` do not need the PipeWire
   development packages installed;
-- a dependency or link-flag change is scoped to one crate;
-- `cargo clippy --workspace` enforces `undocumented_unsafe_blocks`, so every
-  `unsafe` block in that crate carries a `SAFETY:` justification.
+- a PipeWire dependency or link-flag change is scoped to one crate.
 
-The daemon does keep `libc` for `getpwuid`, `sysconf`, and `setrlimit`, and
-`atrium-portal-ipc` keeps it for sealed-memfd handling; both are audited the
-same way.
+`libc` is not confined the same way. The daemon calls it for `getpwuid_r`,
+`sysconf`, `setrlimit`, `geteuid`, and the arca `SIGTERM`;
+`atrium-portal-ipc` for sealed-memfd and descriptor passing;
+`atrium-portal-request` for thread ids; and `atrium-portal-secret` for
+`poll(2)`. Every crate inherits `[workspace.lints]`, so
+`undocumented_unsafe_blocks = "deny"` requires a `SAFETY:` justification on
+each of those `unsafe` blocks. Crates with no `unsafe` carry
+`#![forbid(unsafe_code)]`.

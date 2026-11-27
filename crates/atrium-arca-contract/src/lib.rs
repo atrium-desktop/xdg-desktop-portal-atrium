@@ -16,8 +16,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::ffi::{OsStr, OsString};
-use std::io;
+use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 
@@ -27,8 +26,18 @@ use std::path::{Component, Path, PathBuf};
 /// covers FileChooser only. ADR-0027 restarts it at 1: the legacy prompter
 /// envelope's version 6 described seven prompt kinds, six of which have no
 /// process left to speak them (ADR-0026). `scripts/version-consistency.sh`
-/// cross-checks this constant against the arca repository.
+/// checks that the repository's smoke-test payloads match this constant, and
+/// `arca` carries the matching `ARCA_CONTRACT_VERSION` constant.
 pub const ARCA_CONTRACT_VERSION: u32 = 1;
+
+/// Cap on the one request line written to arca's standard input: the
+/// complete `{"version":…,"request":…}` envelope *and* its trailing newline.
+///
+/// arca reads at most this many bytes and refuses anything longer, so the
+/// backend must measure exactly the bytes it writes — measuring the bare
+/// request would admit a request that arca then rejects. arca defines the
+/// matching `MAX_CHOOSER_REQUEST_BYTES`.
+pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 /// One filesystem path encoded as its native Unix bytes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -146,26 +155,6 @@ impl FileChooserRequest {
             }
         }
         validate_choices(&self.choices)
-    }
-
-    /// Apply `SaveFiles` basename and collision semantics to the selected
-    /// folder. Other modes return the selected paths unchanged.
-    pub fn finish_paths(&self, selected: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
-        if self.mode != FileChooserMode::SaveFiles {
-            return Ok(selected);
-        }
-        let folder = selected
-            .into_iter()
-            .next()
-            .ok_or_else(|| "SaveFiles returned no selected folder".to_owned())?;
-        let mut reserved = std::collections::HashSet::new();
-        let mut paths = Vec::with_capacity(self.files.len());
-        for name in &self.files {
-            let path = unique_child(&folder, &name.to_path_buf(), &reserved)?;
-            reserved.insert(path.clone());
-            paths.push(path);
-        }
-        Ok(paths)
     }
 }
 
@@ -321,55 +310,6 @@ fn validate_absolute_path(name: &str, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn unique_child(
-    folder: &Path,
-    name: &Path,
-    reserved: &std::collections::HashSet<PathBuf>,
-) -> Result<PathBuf, String> {
-    validate_basename(name)?;
-    let candidate = folder.join(name);
-    if !reserved.contains(&candidate) && !path_occupied(&candidate) {
-        return Ok(candidate);
-    }
-
-    let raw = name.as_os_str().as_bytes();
-    let (stem, extension) = split_extension(raw);
-    for suffix in 1..=u32::MAX {
-        let mut bytes = stem.to_vec();
-        bytes.extend_from_slice(format!("({suffix})").as_bytes());
-        if let Some(extension) = extension {
-            bytes.push(b'.');
-            bytes.extend_from_slice(extension);
-        }
-        let candidate = folder.join(OsStr::from_bytes(&bytes));
-        if !reserved.contains(&candidate) && !path_occupied(&candidate) {
-            return Ok(candidate);
-        }
-    }
-    Err(format!(
-        "could not construct a unique filename for {name:?}"
-    ))
-}
-
-fn path_occupied(path: &Path) -> bool {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => true,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-        // Permission and I/O failures must not be interpreted as a free name.
-        Err(_) => true,
-    }
-}
-
-fn split_extension(name: &[u8]) -> (&[u8], Option<&[u8]>) {
-    let Some(dot) = name.iter().rposition(|byte| *byte == b'.') else {
-        return (name, None);
-    };
-    if dot == 0 || dot + 1 == name.len() {
-        return (name, None);
-    }
-    (&name[..dot], Some(&name[dot + 1..]))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,31 +368,6 @@ mod tests {
     }
 
     #[test]
-    fn save_files_preserves_order_and_avoids_existing_names() {
-        let folder = std::env::temp_dir().join(format!(
-            "atrium-arca-contract-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("report.txt"), b"old").unwrap();
-        std::fs::write(folder.join("report(1).txt"), b"old").unwrap();
-
-        let mut req = request(FileChooserMode::SaveFiles);
-        req.files = vec![
-            BytePath::from_path("report.txt"),
-            BytePath::from_path("image.png"),
-        ];
-        let paths = req.finish_paths(vec![folder.clone()]).unwrap();
-        assert_eq!(paths[0], folder.join("report(2).txt"));
-        assert_eq!(paths[1], folder.join("image.png"));
-        std::fs::remove_dir_all(folder).unwrap();
-    }
-
-    #[test]
     fn duplicate_choice_ids_are_rejected() {
         let mut req = request(FileChooserMode::OpenFile);
         req.choices = vec![
@@ -497,27 +412,10 @@ mod tests {
     }
 
     #[test]
-    fn save_files_avoids_duplicate_suggestions_in_one_request() {
-        let folder = std::env::temp_dir().join(format!(
-            "atrium-arca-contract-duplicates-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&folder).unwrap();
-        let mut req = request(FileChooserMode::SaveFiles);
-        req.files = vec![
-            BytePath::from_path("same.txt"),
-            BytePath::from_path("same.txt"),
-        ];
-        let paths = req.finish_paths(vec![folder.clone()]).unwrap();
-        assert_eq!(paths, [folder.join("same.txt"), folder.join("same(1).txt")]);
-        std::fs::remove_dir_all(folder).unwrap();
-    }
-
-    #[test]
     fn contract_version_is_pinned_to_the_arca_wire_shape() {
         // The version names the bytes on the pipes. Bumping it is a
-        // coordinated change with the arca repository's own constant, which
-        // `scripts/version-consistency.sh` cross-checks.
+        // coordinated change with the arca repository's own
+        // `ARCA_CONTRACT_VERSION` constant.
         assert_eq!(ARCA_CONTRACT_VERSION, 1);
     }
 

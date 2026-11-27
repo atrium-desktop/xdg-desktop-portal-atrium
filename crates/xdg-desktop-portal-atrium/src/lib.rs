@@ -633,8 +633,9 @@ pub fn run() -> Result<(), PortalError> {
         access_supervisor.serve(|rx| access::access_worker(rx, Arc::clone(&access_tracker)))
     })?;
 
-    // AppChooser uses the same per-request supervised prompter pattern as
-    // Access; candidate resolution happens in the served method.
+    // AppChooser uses the same per-request supervised worker pattern as
+    // Access; candidate resolution happens in the served method and the
+    // selection goes to the compositor's PickApp chrome.
     let app_chooser_tracker = Arc::clone(&tracker);
     spawn_worker("atrium-portal-app-chooser", move || {
         app_chooser_supervisor

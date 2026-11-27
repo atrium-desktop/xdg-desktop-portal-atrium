@@ -19,7 +19,6 @@ use zbus::{ObjectPath, Variant};
 use crate::companion::arca;
 use crate::uri;
 
-const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_ACTIVE_FILE_CHOOSERS: usize = 32;
 
 /// One file-chooser request handed from the bus methods to the dispatcher.
@@ -193,16 +192,12 @@ impl FileChooserIface {
 
 /// Validate before enqueueing so a hostile request cannot multiply a large
 /// D-Bus payload across the bounded worker queue.
+///
+/// The size check measures the exact envelope bytes written to arca, the
+/// same quantity arca's own cap measures.
 fn validate_request(request: &FileChooserRequest) -> Result<(), String> {
     request.validate()?;
-    let encoded = serde_json::to_vec(request)
-        .map_err(|error| format!("could not encode FileChooser request: {error}"))?;
-    if encoded.len() > MAX_REQUEST_BYTES {
-        return Err(format!(
-            "FileChooser request exceeds the {MAX_REQUEST_BYTES}-byte limit"
-        ));
-    }
-    Ok(())
+    arca::encode_request(request).map(drop)
 }
 
 /// Dispatch each request to its own supervised task. A modal chooser belongs
@@ -651,11 +646,53 @@ mod tests {
     }
 
     #[test]
+    fn size_cap_measures_the_envelope_arca_reads() {
+        use atrium_arca_contract::MAX_REQUEST_BYTES;
+
+        let mut request = sized_request(String::new());
+        let overhead = arca::encode_request(&request).unwrap().len();
+        let bare_overhead = serde_json::to_vec(&request).unwrap().len();
+        assert!(overhead > bare_overhead, "the envelope adds bytes");
+
+        // Exactly at the cap: accepted.
+        request.title = "x".repeat(MAX_REQUEST_BYTES - overhead);
+        assert_eq!(
+            arca::encode_request(&request).unwrap().len(),
+            MAX_REQUEST_BYTES
+        );
+        assert!(validate_request(&request).is_ok());
+
+        // The bare request still fits, but the line arca reads does not.
+        request.title.push('x');
+        assert!(serde_json::to_vec(&request).unwrap().len() <= MAX_REQUEST_BYTES);
+        assert!(validate_request(&request).is_err());
+    }
+
+    fn sized_request(title: String) -> FileChooserRequest {
+        FileChooserRequest {
+            mode: FileChooserMode::OpenFile,
+            app_id: "dev.tessera.Test".into(),
+            title,
+            accept_label: None,
+            modal: true,
+            parent_window: None,
+            multiple: false,
+            current_folder: None,
+            current_name: None,
+            current_file: None,
+            filters: Vec::new(),
+            current_filter: None,
+            choices: Vec::new(),
+            files: Vec::new(),
+        }
+    }
+
+    #[test]
     fn oversized_request_is_rejected_before_enqueue() {
         let request = FileChooserRequest {
             mode: FileChooserMode::OpenFile,
             app_id: "dev.tessera.Test".into(),
-            title: "x".repeat(MAX_REQUEST_BYTES + 1),
+            title: "x".repeat(atrium_arca_contract::MAX_REQUEST_BYTES + 1),
             accept_label: None,
             modal: true,
             parent_window: None,

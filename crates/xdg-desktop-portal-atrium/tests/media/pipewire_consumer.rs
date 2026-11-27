@@ -99,7 +99,8 @@ pub fn consume_frames_metadata(
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(pw::init);
     let mainloop = pw::main_loop::MainLoopRc::new(None).map_err(|e| e.to_string())?;
-    let context = pw::context::ContextRc::new(&mainloop, None).map_err(|e| e.to_string())?;
+    let context = pw::context::ContextRc::new(&mainloop, Some(no_rt_properties()))
+        .map_err(|e| e.to_string())?;
     let socket = UnixStream::connect(socket).map_err(|e| format!("connect {socket:?}: {e}"))?;
     let core = context
         .connect_fd_rc(std::os::fd::OwnedFd::from(socket), None)
@@ -309,7 +310,8 @@ pub fn consume_one_frame(
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(pw::init);
     let mainloop = pw::main_loop::MainLoopRc::new(None).map_err(|e| e.to_string())?;
-    let context = pw::context::ContextRc::new(&mainloop, None).map_err(|e| e.to_string())?;
+    let context = pw::context::ContextRc::new(&mainloop, Some(no_rt_properties()))
+        .map_err(|e| e.to_string())?;
     let socket = UnixStream::connect(socket).map_err(|e| format!("connect {socket:?}: {e}"))?;
     let core = context
         .connect_fd_rc(std::os::fd::OwnedFd::from(socket), None)
@@ -438,7 +440,8 @@ pub fn consume_one_frame_damage(
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(pw::init);
     let mainloop = pw::main_loop::MainLoopRc::new(None).map_err(|e| e.to_string())?;
-    let context = pw::context::ContextRc::new(&mainloop, None).map_err(|e| e.to_string())?;
+    let context = pw::context::ContextRc::new(&mainloop, Some(no_rt_properties()))
+        .map_err(|e| e.to_string())?;
     let socket = UnixStream::connect(socket).map_err(|e| format!("connect {socket:?}: {e}"))?;
     let core = context
         .connect_fd_rc(std::os::fd::OwnedFd::from(socket), None)
@@ -748,4 +751,11 @@ fn serialize(value: &pod::Value) -> Vec<u8> {
         .expect("pod serialization")
         .0
         .into_inner()
+}
+
+/// Context properties that keep libpipewire's realtime module out, as the
+/// portal's own cast context does: that module's blocking D-Bus priority
+/// request would otherwise make context teardown wait on the test bus.
+fn no_rt_properties() -> pw::properties::PropertiesBox {
+    pw::properties::properties! { "module.rt" => "false" }
 }

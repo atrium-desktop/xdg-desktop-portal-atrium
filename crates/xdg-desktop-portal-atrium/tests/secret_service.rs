@@ -470,3 +470,135 @@ where
     });
     reply.unwrap_or_else(|error| panic!("{label} failed: {error}"))
 }
+
+#[test]
+fn sigil_socket_path_override_and_desynced_status_are_honored() {
+    let Some(bus) = private_bus() else {
+        eprintln!(
+            "sigil_socket_path_override_and_desynced_status_are_honored: no dbus-daemon, skipping"
+        );
+        return;
+    };
+    let conn = bus.connect();
+    let data_dir = temp_dir("sigil-override-data");
+    let runtime_dir = temp_dir("sigil-override-runtime");
+    let custom_dir = temp_dir("sigil-custom");
+    let custom_sock = custom_dir.join("custom-native.sock");
+
+    let sigil = FakeSigil::bind_at(&custom_sock, FakeSigilResponse::Desynced);
+    assert!(sigil.bind_error().is_none(), "fake sigil must bind");
+
+    let mut cmd = common::daemon_command(&bus, &data_dir, &runtime_dir);
+    cmd.env("SIGIL_SOCKET_PATH", &custom_sock);
+    let _daemon = KillOnDrop(cmd.spawn().expect("spawn portal daemon"));
+    wait_for_name(&conn, PORTAL);
+    common::claim_frontend(&conn);
+
+    let portal = bus::proxy(
+        &conn,
+        PORTAL,
+        DESKTOP_PATH,
+        "org.freedesktop.impl.portal.Secret",
+    );
+    let (_read_end, write_end) = pipe_pair();
+    let fd: Fd<'_> = Fd::from(write_end);
+    let handle = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1/desynced")
+        .expect("request handle path");
+    let (response, _results): (u32, HashMap<String, zbus::zvariant::OwnedVariant>) = bus::call(
+        &portal,
+        "RetrieveSecret",
+        &(
+            handle,
+            "dev.tessera.desynced",
+            fd,
+            HashMap::<String, Variant<'_>>::new(),
+        ),
+    );
+    assert_eq!(
+        response, 2,
+        "a desynchronized vault must surface as portal error code 2"
+    );
+    assert_eq!(
+        sigil.observed().len(),
+        1,
+        "portal must connect to SIGIL_SOCKET_PATH rather than XDG_RUNTIME_DIR"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+    let _ = std::fs::remove_dir_all(&runtime_dir);
+    let _ = std::fs::remove_dir_all(&custom_dir);
+}
+
+#[test]
+fn request_close_aborts_in_flight_sigil_wait_promptly() {
+    let Some(bus) = private_bus() else {
+        eprintln!("request_close_aborts_in_flight_sigil_wait_promptly: no dbus-daemon, skipping");
+        return;
+    };
+    let conn = bus.connect();
+    let data_dir = temp_dir("sigil-cancel-data");
+    let runtime_dir = temp_dir("sigil-cancel-runtime");
+    let sigil = FakeSigil::bind(&runtime_dir, FakeSigilResponse::Stall);
+    assert!(sigil.bind_error().is_none(), "fake sigil must bind");
+    let _daemon = KillOnDrop(spawn_daemon(&bus, &data_dir, &runtime_dir));
+    wait_for_name(&conn, PORTAL);
+    common::claim_frontend(&conn);
+
+    let handle_path = "/org/freedesktop/portal/desktop/request/cancel/secret1";
+    let call_conn = conn.clone();
+    let started = std::time::Instant::now();
+    let (read_end, write_end) = pipe_pair();
+    let worker = std::thread::spawn(move || {
+        let portal = bus::proxy(
+            &call_conn,
+            PORTAL,
+            DESKTOP_PATH,
+            "org.freedesktop.impl.portal.Secret",
+        );
+        let fd: Fd<'_> = Fd::from(write_end);
+        let handle = ObjectPath::try_from(handle_path).expect("request handle path");
+        bus::call::<_, (u32, HashMap<String, zbus::zvariant::OwnedVariant>)>(
+            &portal,
+            "RetrieveSecret",
+            &(
+                handle,
+                "dev.tessera.cancel",
+                fd,
+                HashMap::<String, Variant<'_>>::new(),
+            ),
+        )
+    });
+
+    // Wait until the request is actively parked on the stalled sigil socket.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while sigil.observed().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "RetrieveSecret never reached fake sigil"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // Issue Request.Close while sigil is stalled: the portal must abort the
+    // socket wait immediately and answer 1 (cancelled).
+    let req_proxy = bus::proxy(
+        &conn,
+        PORTAL,
+        handle_path,
+        "org.freedesktop.impl.portal.Request",
+    );
+    bus::call::<(), ()>(&req_proxy, "Close", &());
+
+    let (code, _) = worker.join().expect("RetrieveSecret call thread");
+    assert_eq!(
+        code, 1,
+        "Request.Close during sigil wait must answer 1 (cancelled)"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "cancellation must not wait for the 300s socket timeout"
+    );
+    drop(read_end);
+    let _ = std::fs::remove_dir_all(&data_dir);
+    let _ = std::fs::remove_dir_all(&runtime_dir);
+}

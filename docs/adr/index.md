@@ -31,3 +31,4 @@
 | [0027](0027-arca-chooser-contract-crate.md) | The arca FileChooser contract crate | Accepted |
 | [0028](0028-supervised-workers-and-test-isolation.md) | Supervised interface workers and hermetic test processes | Accepted |
 | [0029](0029-zbus-6-migration.md) | zbus 6 migration and the connection driver | Accepted |
+| [0030](0030-companion-contract-hardening-and-clean-break-alignment.md) | Companion contract hardening and clean-break alignment | Accepted |

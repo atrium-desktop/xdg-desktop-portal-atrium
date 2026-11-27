@@ -20,6 +20,7 @@ use crate::{
     SettingsSnapshot, StreamCursorMode, StreamPixelFormat, StreamTarget, VirtualOutputSpec,
 };
 
+#[derive(Debug)]
 pub struct CaptureOutputPayload {
     pub width: u32,
     pub height: u32,
@@ -45,6 +46,7 @@ pub struct StreamSlotInfo {
     pub byte_len: u64,
 }
 
+#[derive(Debug)]
 pub struct StreamFramePayload {
     pub stream_id: u64,
     pub sequence: u64,
@@ -62,6 +64,7 @@ pub struct StreamFramePayload {
 /// header, but the descriptor is sent unsealed because dmabufs cannot carry
 /// memfd seals. Tests supply the descriptor (a plain memfd stands in for a
 /// GPU buffer on machines without a render node).
+#[derive(Debug)]
 pub struct StreamFrameFdPayload {
     pub stream_id: u64,
     pub sequence: u64,
@@ -222,6 +225,7 @@ pub trait Handler: Send + Sync + 'static {
 type SharedWriter = Arc<Mutex<UnixStream>>;
 type Streams = Arc<Mutex<HashMap<u64, (u64, SharedWriter)>>>;
 
+#[derive(Debug)]
 pub struct Server {
     path: PathBuf,
     stop: Arc<AtomicBool>,

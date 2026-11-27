@@ -21,3 +21,6 @@ test-server = []
 [lib]
 name = "atrium_portal_ipc"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

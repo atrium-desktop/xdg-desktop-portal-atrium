@@ -1,11 +1,11 @@
 //! `org.freedesktop.impl.portal.Background` v1: consent for background
 //! activity and login autostart.
 //!
-//! Every request is answered by the Portal-owned, one-shot confirmation
-//! dialog (the same prompter surface Access uses): the body names the
+//! Every request is answered by the compositor's one-shot PickConfirm
+//! consent chrome (the same surface Access uses): the body names the
 //! application id, quotes the supplied reason, and notes an autostart
 //! request. Only the allow button grants (`background: true`); denial,
-//! dismissal, or a racing `Request.Close` answers 1, and prompter failures
+//! dismissal, or a racing `Request.Close` answers 1, and compositor failures
 //! answer 2. There is deliberately no permission-store persistence — the
 //! prompt appears on every request, so an application cannot silently
 //! re-acquire background rights after the user has lost track of the
@@ -30,12 +30,13 @@ use atrium_portal_request::{PortalResponse, RequestTracker, ResponseSender, sync
 
 /// The app id becomes a filename, so it is bounded and separator-free.
 const MAX_APP_ID_BYTES: usize = 255;
-/// The supplied reason; the composed dialog body is further bounded by the
-/// prompter contract's 16 KiB text cap.
+/// The supplied reason; the composed dialog body is further bounded by
+/// [`MAX_BODY_BYTES`].
 const MAX_REASON_BYTES: usize = 16 * 1024;
 const MAX_COMMANDLINE_ARGS: usize = 64;
 const MAX_ARG_BYTES: usize = 4 * 1024;
-/// The prompter contract's per-text cap; the composed body must fit.
+/// The Portal-owned cap on consent text sent to the compositor; the
+/// composed body must fit.
 const MAX_BODY_BYTES: usize = 16 * 1024;
 
 /// The autostart half of a request, present only when the application
@@ -121,7 +122,7 @@ impl BackgroundIface {
     }
 }
 
-/// Validate the request and translate it into the prompter's confirmation
+/// Validate the request and translate it into the PickConfirm consent request
 /// plus the autostart spec (when the application actually asked for one).
 fn parse_request(
     app_id: &str,
@@ -178,8 +179,7 @@ fn parse_request(
 }
 
 /// The dialog body: the application id, the verbatim reason, and the
-/// autostart note, truncated on a char boundary to fit the prompter
-/// contract's text cap.
+/// autostart note, truncated on a char boundary to fit [`MAX_BODY_BYTES`].
 fn consent_body(app_id: &str, reason: &str, autostart: bool) -> String {
     let mut body = format!("The application '{app_id}' wants to run in the background.");
     if !reason.trim().is_empty() {
@@ -502,7 +502,7 @@ mod tests {
         assert!(body.contains("start automatically"));
         let body = consent_body("org.foo.Bar", "", false);
         assert!(!body.contains("start automatically"));
-        // The composed body always fits the prompter contract's text cap.
+        // The composed body always fits the consent text cap.
         let body = consent_body("org.foo.Bar", &"x".repeat(MAX_REASON_BYTES), false);
         assert!(body.len() <= MAX_BODY_BYTES);
     }

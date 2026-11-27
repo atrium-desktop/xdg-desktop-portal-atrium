@@ -2,7 +2,7 @@
 //!
 //! The portal frontend supplies Request and Session object paths to the
 //! backend. `CreateSession` exports the Session object, `SelectSources`
-//! runs the source selection (chooser prompter, optional window pick, and
+//! runs the source selection (compositor source picker, optional window pick, and
 //! a compositor consent confirmation), and `Start` spawns the cast thread
 //! (compositor frame stream → PipeWire producer). Blocking picker and
 //! PipeWire work stays on the screencast worker; D-Bus methods
@@ -443,9 +443,10 @@ impl ScreenCastIface {
     }
 }
 
-/// Dispatch blocking selections and PipeWire negotiations independently.
-/// Session close/end events stay on this dispatcher and therefore remain
-/// responsive even while another application has a confirmation open.
+/// Dispatch blocking selections, PipeWire negotiations, and session
+/// teardowns independently. The dispatcher itself only touches the session
+/// registry, so one application's open confirmation, slow negotiation, or
+/// hung compositor teardown never delays another session's request.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cast_worker(
     rx: &mpsc::Receiver<CastJob>,
@@ -464,6 +465,7 @@ pub(crate) fn cast_worker(
         }
     }
     let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let closing: Arc<Mutex<std::collections::HashSet<String>>> = Arc::default();
     while let Ok(job) = rx.recv() {
         match job {
             CastJob::SelectSources {
@@ -560,7 +562,10 @@ pub(crate) fn cast_worker(
                 }
             }
             CastJob::CloseSession { session_path } | CastJob::SessionEnded { session_path } => {
-                close_session(&conn, &sessions, &session_path);
+                let finish_conn = conn.clone();
+                dispatch_close(&sessions, &closing, session_path, move |session, path| {
+                    finish_close(&finish_conn, session, path);
+                });
             }
         }
     }
@@ -983,21 +988,74 @@ fn start_cast(
     }
 }
 
-/// Stop the cast (if any), emit `Closed`, and remove the session object.
+/// Detach the session from the registry and finish its teardown off the
+/// dispatcher.
+///
+/// Removal happens here, on the dispatcher, so it stays the single ordering
+/// point for the registry. The teardown — joining the cast thread, whose
+/// compositor IPC is bounded only by its per-call timeout — runs on its own
+/// thread and emits `Closed` only after the cast has stopped.
 ///
 /// Idempotent, and the registry is *not* the gate on the object teardown. A
 /// session can be detached twice — `CloseSession` from the client and
-/// `SessionEnded` from the bus-name GC can both arrive, in either order — and
-/// the second arrival must still finish the object teardown the first may not
-/// have reached. Gating on `remove()` returning `Some` would make a
-/// GC-detached session skip both the `Closed` signal and the object removal,
-/// leaking an exported interface that then blocks reuse of the path forever.
-fn close_session(
-    conn: &zbus::Connection,
+/// `SessionEnded` from the cast or the bus-name GC can both arrive, in either
+/// order — and the second arrival must still finish the object teardown the
+/// first may not have reached. While the first arrival's teardown is still
+/// running, a second one is dropped: that teardown emits `Closed` once the
+/// cast has stopped, and emitting it earlier would tell the frontend a
+/// still-running cast had ended.
+fn dispatch_close<F>(
     sessions: &Arc<Mutex<SessionRegistry>>,
+    closing: &Arc<Mutex<std::collections::HashSet<String>>>,
+    session_path: String,
+    finish: F,
+) where
+    F: FnOnce(Option<session::CastSession>, &str) + Send + 'static,
+{
+    let session = sync::lock(sessions, "screencast sessions").remove(&session_path);
+    {
+        let mut closing = sync::lock(closing, "screencast closing");
+        match &session {
+            Some(_) => {
+                closing.insert(session_path.clone());
+            }
+            None if closing.contains(&session_path) => return,
+            None => {}
+        }
+    }
+    // Shared so the inline fallback can still run `finish` if the thread
+    // cannot be spawned (the unspawned closure is dropped with its captures).
+    let finish = Arc::new(Mutex::new(Some(finish)));
+    let task_finish = Arc::clone(&finish);
+    let task_closing = Arc::clone(closing);
+    let task_path = session_path.clone();
+    let spawned = std::thread::Builder::new()
+        .name("atrium-portal-close-session".to_owned())
+        .spawn(move || {
+            if let Some(finish) = sync::lock(&task_finish, "screencast close").take() {
+                finish(session, &task_path);
+            }
+            sync::lock(&task_closing, "screencast closing").remove(&task_path);
+        });
+    if let Err(error) = spawned {
+        // The unspawned closure dropped the session, and dropping its stop
+        // handle already quits the cast (as an owner-left reclaim does); only
+        // the object teardown is left, and it does not block.
+        log::warn!("portal: could not spawn teardown for {session_path}: {error}");
+        if let Some(finish) = sync::lock(&finish, "screencast close").take() {
+            finish(None, &session_path);
+        }
+        sync::lock(closing, "screencast closing").remove(&session_path);
+    }
+}
+
+/// Stop the cast (if any), emit `Closed`, and remove the session object.
+fn finish_close(
+    conn: &zbus::Connection,
+    session: Option<session::CastSession>,
     session_path: &str,
 ) {
-    match sync::lock(sessions, "screencast sessions").remove(session_path) {
+    match session {
         Some(session) => {
             session::stop_cast(session);
             log::debug!("portal: screencast session {session_path} closed");
@@ -1066,6 +1124,102 @@ fn streams_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_slow_teardown_neither_holds_the_dispatcher_nor_races_a_duplicate_close() {
+        use std::io::Read as _;
+        use std::time::{Duration, Instant};
+
+        let path = "/org/freedesktop/portal/desktop/session/1/slow";
+        let sessions = Arc::new(Mutex::new(SessionRegistry::default()));
+        let closing: Arc<Mutex<std::collections::HashSet<String>>> = Arc::default();
+        sessions
+            .lock()
+            .unwrap()
+            .insert(path, "org.example.App", None)
+            .unwrap();
+        // A cast thread that, once told to stop, takes until the test
+        // releases it: a teardown stuck on an unresponsive compositor.
+        let (stop, mut stop_seen) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (release, released) = mpsc::channel::<()>();
+        let cast = std::thread::spawn(move || {
+            let mut byte = [0u8; 1];
+            let _ = stop_seen.read(&mut byte);
+            let _ = released.recv_timeout(Duration::from_secs(10));
+        });
+        assert!(
+            sessions
+                .lock()
+                .unwrap()
+                .mark_started(path, stop, cast)
+                .is_ok()
+        );
+
+        let (done_tx, done_rx) = mpsc::channel::<(bool, String)>();
+        let first = done_tx.clone();
+        let dispatched = Instant::now();
+        dispatch_close(
+            &sessions,
+            &closing,
+            path.to_owned(),
+            move |session, path| {
+                let had_session = session.is_some();
+                if let Some(session) = session {
+                    session::stop_cast(session);
+                }
+                first.send((had_session, path.to_owned())).unwrap();
+            },
+        );
+        assert!(
+            dispatched.elapsed() < Duration::from_millis(500),
+            "the dispatcher must not wait for the cast thread"
+        );
+        assert!(closing.lock().unwrap().contains(path));
+        assert!(!sessions.lock().unwrap().contains(path));
+
+        // A second close while the first teardown runs must not emit
+        // `Closed` ahead of the cast actually stopping.
+        let second = done_tx.clone();
+        dispatch_close(
+            &sessions,
+            &closing,
+            path.to_owned(),
+            move |session, path| {
+                second.send((session.is_some(), path.to_owned())).unwrap();
+            },
+        );
+        assert!(done_rx.recv_timeout(Duration::from_millis(200)).is_err());
+
+        release.send(()).unwrap();
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            (true, path.to_owned())
+        );
+        assert!(done_rx.recv_timeout(Duration::from_millis(200)).is_err());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while closing.lock().unwrap().contains(path) {
+            assert!(
+                Instant::now() < deadline,
+                "the teardown never cleared its mark"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // A late arrival after the teardown still finishes the object side.
+        let late = done_tx.clone();
+        dispatch_close(
+            &sessions,
+            &closing,
+            path.to_owned(),
+            move |session, path| {
+                late.send((session.is_some(), path.to_owned())).unwrap();
+            },
+        );
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            (false, path.to_owned())
+        );
+    }
 
     fn options(pairs: &[(&str, Variant<'static>)]) -> HashMap<String, Variant<'static>> {
         pairs

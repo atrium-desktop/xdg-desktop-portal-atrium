@@ -226,30 +226,41 @@ fn run_retrieve(
         }
     };
 
-    let secret =
-        match connection.get_application_secret("atrium.portal.Secret/v1", app_id, "master-secret")
-        {
-            Ok(secret) => secret,
-            Err(NativeError::Locked) => {
-                log::info!("portal: sigil is locked for '{app_id}'");
-                return (1, HashMap::new());
-            }
-            Err(NativeError::Cancelled) => {
-                log::info!("portal: unlock cancelled for '{app_id}'");
-                return (1, HashMap::new());
-            }
-            Err(NativeError::TimedOut) => {
-                log::error!(
-                    "portal: sigil did not answer RetrieveSecret for '{app_id}' within the socket \
+    let is_cancelled = || sync::lock(tracker, "secret tracker").was_closed(request_path);
+    let secret = match connection.get_application_secret_cancellable(
+        "atrium.portal.Secret/v1",
+        app_id,
+        "master-secret",
+        Some(&is_cancelled),
+    ) {
+        Ok(secret) => secret,
+        Err(NativeError::Locked) => {
+            log::info!("portal: sigil is locked for '{app_id}'");
+            return (1, HashMap::new());
+        }
+        Err(NativeError::Desynced) => {
+            log::error!(
+                "portal: sigil vault credentials are desynchronized for '{app_id}'; \
+                     run 'sigil recover' to re-synchronize"
+            );
+            return (2, HashMap::new());
+        }
+        Err(NativeError::Cancelled) => {
+            log::info!("portal: unlock cancelled for '{app_id}'");
+            return (1, HashMap::new());
+        }
+        Err(NativeError::TimedOut) => {
+            log::error!(
+                "portal: sigil did not answer RetrieveSecret for '{app_id}' within the socket \
                  timeout; treating the vault as unavailable"
-                );
-                return (2, HashMap::new());
-            }
-            Err(error) => {
-                log::error!("portal: error retrieving secret for '{app_id}': {error}");
-                return (2, HashMap::new());
-            }
-        };
+            );
+            return (2, HashMap::new());
+        }
+        Err(error) => {
+            log::error!("portal: error retrieving secret for '{app_id}': {error}");
+            return (2, HashMap::new());
+        }
+    };
 
     // The user may have given up while sigil was prompting. Answering 1 keeps
     // the contract truthful, and dropping `secret` wipes it (ADR-0022).

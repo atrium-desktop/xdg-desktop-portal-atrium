@@ -373,7 +373,18 @@ fn run_cast(
 
     // Outward half: PipeWire producer.
     let mainloop = pw::main_loop::MainLoopRc::new(None).map_err(|e| e.to_string())?;
-    let context = pw::context::ContextRc::new(&mainloop, None).map_err(|e| e.to_string())?;
+    // `module.rt = false` keeps libpipewire's realtime module out of this
+    // context. That module asks RTKit or the frontend's Realtime portal for a
+    // priority with a *blocking* D-Bus call on its own thread, and destroying
+    // the context joins that thread — so an unanswered call stalled cast
+    // teardown, and with it the screencast worker, for the full D-Bus
+    // timeout. A producer that republishes already-rendered compositor
+    // frames gains nothing from realtime scheduling.
+    let context = pw::context::ContextRc::new(
+        &mainloop,
+        Some(pw::properties::properties! { "module.rt" => "false" }),
+    )
+    .map_err(|e| e.to_string())?;
     let core = context.connect_rc(None).map_err(|e| e.to_string())?;
     let registry = core.get_registry_rc().map_err(|e| e.to_string())?;
     // Use a reference-counted stream so the IPC source can wake the PipeWire

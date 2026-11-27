@@ -27,9 +27,10 @@ only. A peer that does not recognize the version must refuse the exchange
 rather than guess: the backend rejects a mismatched reply, and arca refuses a
 mismatched request.
 
-`scripts/version-consistency.sh` cross-checks this constant against the arca
-repository and against the smoke-test payloads in
-[Portal UI Testing](../dev/portal-ui-testing.md).
+`scripts/version-consistency.sh` checks this constant against the smoke-test
+payloads in [Portal UI Testing](../dev/portal-ui-testing.md); `arca` defines
+the matching `ARCA_CONTRACT_VERSION = 1` in its own `arca-engine::chooser`
+module.
 
 ## Request
 
@@ -47,7 +48,7 @@ repository and against the smoke-test payloads in
 | `current_file` | byte path \| null | Pre-selected file |
 | `filters` | filter array | Label plus typed `glob`/`mime` rules |
 | `current_filter` | filter \| null | The selected filter |
-| `choices` | choice array | Embedded controls (`(ssa(ss)s)` shape) |
+| `choices` | choice array | Embedded controls (`(ssa(ss)s)` shape); an empty `selected` string (`""`) defaults to `"false"` (checkbox) or the first option ID (dropdown) |
 | `files` | byte-path array | Suggested basenames for `save_files` |
 
 ### Paths are bytes
@@ -78,9 +79,11 @@ code 2:
 - a returned filter was offered;
 - answered choice values match the offered controls in order.
 
-`save_files` is special: the chooser returns the chosen *folder* and the
-contract's `finish_paths` derives the final paths, making each suggested
-basename unique and avoiding names that already exist.
+`save_files` is special: the user chooses a target folder inside Arca, Arca
+resolves each suggested basename into a unique non-colliding path inside that
+folder, and Arca emits all `request.files.len()` final paths in request order.
+The backend validates the exact path count (`paths.len() == request.files.len()`)
+and does not re-run path synthesis.
 
 ## Process Discipline
 
@@ -89,7 +92,18 @@ The backend, not the contract crate, owns supervision
 
 - one child per request; the dialog's lifetime is the request's lifetime, so
   there is no wall-clock timeout;
-- `Request.Close` kills the child and answers code 1;
+- the request line — the envelope plus its trailing newline — is at most
+  `MAX_REQUEST_BYTES` (1 MiB); the backend measures those exact bytes before
+  enqueueing and refuses a larger request as `InvalidArgs`, so arca's
+  matching cap never fires;
+- the request is written on its own thread, so a child that never reads
+  `stdin` cannot block cancellation;
+- the response is at most 8 MiB;
+- once the child has exited, its pipes get a 2 s grace to reach EOF; a
+  process it left behind that still holds one fails the request with code 2
+  instead of blocking the worker;
+- `Request.Close` sends `SIGTERM`, escalates to `SIGKILL` after 250 ms,
+  reaps the child, and answers code 1;
 - a concurrency cap refuses excess dialogs with code 2;
 - the child's `stderr` is forwarded live and its tail is folded into a
   failure message, so a loader refusal (exit 127) names the missing library

@@ -101,7 +101,7 @@ impl AccessIface {
     }
 }
 
-/// Translate the portal arguments into the prompter's confirmation request.
+/// Translate the portal arguments into the PickConfirm consent request.
 /// The subtitle leads the body so both survive the two-text dialog surface;
 /// the `icon` hint is accepted but not rendered.
 fn dialog_request(

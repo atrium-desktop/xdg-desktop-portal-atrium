@@ -26,7 +26,7 @@ frame locally.
 
 | Phase | Backend action |
 |-------|----------------|
-| `SelectSources` | Prompter offers the entire desktop, one connector, or a window; choice is cached per session |
+| `SelectSources` | The compositor's source picker offers the entire desktop, one connector, or a window; choice is cached per session |
 | `Start` | Open scoped IPC (`StreamOutputStart`, `max_fps` 60), learn format/size, create the PipeWire stream |
 | Streaming | Relay `StreamFrame` events; renew the lease at half TTL; keepalive every 16 ms only to reclaim consumer-held dmabuf slots |
 | Geometry change | `StreamGeometryChanged` freezes the cast; backend restarts the stream at the new geometry |

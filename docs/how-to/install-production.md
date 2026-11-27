@@ -9,9 +9,9 @@ Runtime components, none of which is a build dependency:
 
 | Component | Needed for | Without it |
 |---|---|---|
-| **arca** | the `FileChooser` dialog (`arca --chooser-prompt`) | `FileChooser` answers failure code 2 and logs that arca was not found |
+| **arca** `v0.2.18`+ | the `FileChooser` dialog (`arca --chooser-prompt`, contract v1) | `FileChooser` answers failure code 2 and logs that arca was not found or spoke another contract version |
 | **Tessera** (protocol ≥ 24) | every compositor-owned function; prompts need 14/16 | the affected interfaces answer failure code 2 |
-| **sigil** | the `Secret` portal | `Secret` requests fail |
+| **sigil** `v1.4.3`+ | the `Secret` portal | `Secret` requests fail; an older sigil does not prompt for unlock |
 | **WirePlumber** | `ScreenCast` streams | `ScreenCast.Start` fails |
 | `xdg-email` | the `Email` portal hand-off | `Email` fails |
 | logind | `Inhibit` | `Inhibit` fails |
@@ -19,7 +19,9 @@ Runtime components, none of which is a build dependency:
 
 `arca` is located via `$ATRIUM_FILE_CHOOSER_PROMPTER`, a sibling of the daemon,
 `PATH`, then `/usr/local/bin` and `/usr/bin`. Install it in `PATH` for a
-standard deployment.
+standard deployment. Upgrade arca and sigil together with the portal; see the
+[Compatibility Reference](../reference/compatibility.md) for the version
+floor.
 
 Install a Tessera runtime that implements the protocol version in the
 [Compatibility Reference](../reference/compatibility.md). The Portal build

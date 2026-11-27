@@ -37,7 +37,8 @@ cargo +1.89.0 clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ATRIUM_PORTAL_REQUIRE_E2E=1 \
 ATRIUM_PORTAL_REQUIRE_PIPEWIRE_E2E=1 \
-  cargo test --locked --workspace
+  cargo nextest run --locked --workspace
+cargo test --doc --locked --workspace
 cargo deny check
 cargo doc --locked --workspace --no-deps
 cargo build --locked --release --workspace
@@ -65,9 +66,9 @@ metadata interface list before publishing artifacts.
    count is unchanged afterwards (see
    [Test Process Hygiene](test-process-hygiene.md)). A leak only shows up under
    a full parallel run, so a single green run is not evidence.
-2. Confirm no `D`-state `wireplumber`/`pipewire` process remains from earlier
-   runs; one wedged in uninterruptible audio I/O cannot be killed and will
-   degrade every later PipeWire test until reboot.
+2. Confirm no `pipewire` or `wireplumber` process remains from the runs. The
+   test stack never opens audio hardware, so a leftover one is a leak, not a
+   driver wedge.
 3. Confirm every skipped test names a reason and that no skip is masking a
    required dependency in the target environment.
 

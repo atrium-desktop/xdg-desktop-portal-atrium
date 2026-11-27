@@ -105,6 +105,16 @@ pub struct Client {
     pending: VecDeque<StreamMessage>,
 }
 
+/// Omits the socket and lease so a debug log never prints the lease token.
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("version", &self.version)
+            .field("pending", &self.pending.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Client {
     pub fn connect_with_timeout(
         path: &Path,

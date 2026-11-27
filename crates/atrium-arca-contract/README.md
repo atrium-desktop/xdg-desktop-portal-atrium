@@ -12,6 +12,7 @@ envelopes.
 | Type | Role |
 |---|---|
 | `ARCA_CONTRACT_VERSION` | Version of the bytes on the two pipes |
+| `MAX_REQUEST_BYTES` | Cap on the request line arca reads: envelope plus trailing newline (1 MiB) |
 | `FileChooserRequest` | The request envelope, with `validate()` |
 | `FileChooserResponse` | `Selected` / `Cancelled` / `Failed`, with `validate_for()` |
 | `FileChooserMode` | `OpenFile`, `OpenDirectory`, `SaveFile`, `SaveFiles` |
@@ -34,19 +35,20 @@ mode's cardinality, a returned filter was offered, and answered choice values
 match the offered controls in order. The chooser is a fault boundary, not a
 trusted source, so this check lives beside the types it checks.
 
-`FileChooserRequest::finish_paths` applies `SaveFiles` semantics: suggested
-basenames become unique children of the selected folder, avoiding names that
-already exist and names already claimed within the same request.
+For `SaveFiles`, Arca resolves each suggested basename into a unique child path
+inside the user-selected folder and returns all `request.files.len()` final
+paths; `validate_for` enforces exact path cardinality on the backend side.
 
 ## Version
 
-`ARCA_CONTRACT_VERSION` is `1`. It covers FileChooser only, and
-`scripts/version-consistency.sh` cross-checks it against the arca repository.
-See [ADR-0027](../../docs/adr/0027-arca-chooser-contract-crate.md) for why the
-legacy prompter envelope's version 6 was not carried over.
+`ARCA_CONTRACT_VERSION` is `1`. It covers FileChooser only: `scripts/version-consistency.sh`
+verifies this repository's smoke-test payloads against it, and `arca` defines
+the matching `ARCA_CONTRACT_VERSION = 1`. See
+[ADR-0027](../../docs/adr/0027-arca-chooser-contract-crate.md) for why the
+legacy prompter envelope's version 6 was retired.
 
 ## Boundaries
 
-`#![forbid(unsafe_code)]`; depends only on `serde` and `serde_json`. The crate
-spawns nothing, resolves no executable, and holds no socket: supervision lives
-in the daemon's `src/companion/arca.rs`.
+`#![forbid(unsafe_code)]`; depends only on `serde` (`serde_json` in tests). The
+crate spawns nothing, resolves no executable, and holds no socket: supervision
+lives in the daemon's `src/companion/arca.rs`.

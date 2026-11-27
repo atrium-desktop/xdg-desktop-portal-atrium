@@ -31,6 +31,12 @@ pub struct SecretService {
     callers: Arc<atrium_portal_request::CallerGuard>,
 }
 
+impl std::fmt::Debug for SecretService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretService").finish_non_exhaustive()
+    }
+}
+
 impl SecretService {
     /// `callers` is the shared admission guard: only the portal frontend may
     /// reach this private backend (see `atrium_portal_request::caller`).
